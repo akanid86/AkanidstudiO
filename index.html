@@ -12,9 +12,9 @@
   <header>
     <div>
       <strong>น้ำท่วมบ้านเรา</strong>
-      <span>ลุ่มน้ำแม่กลอง • Prototype v0.8 • GERARAI ER UI</span>
+      <span>ลุ่มน้ำแม่กลอง • Prototype v0.9 • Clean slate + Admin</span>
     </div>
-    <button id="alertsBtn" aria-label="ประกาศ">🔔 <b id="alertCount">1</b></button>
+    <div class="header-actions"><button id="adminBtn" class="admin-entry" type="button">🔐 ผู้ดูแล</button></div>
   </header>
 
   <div class="official">⚠️ <b>ข้อมูลเพื่อการเฝ้าระวัง</b> <span>ระบบรายงานและหมุดยกแนวทางจาก GERARAI Emergency Discovery • ข้อมูลจากชุมชนไม่ใช่ประกาศทางการ</span></div>
@@ -141,6 +141,29 @@
       <div class="captcha">☑ CAPTCHA placeholder — production ต้องตรวจ CAPTCHA + rate limit ที่ backend</div>
       <p class="form-error" id="formError" hidden></p>
       <button type="submit" class="primary full" id="submitReportBtn">ส่งรายงาน</button>
+    </form>
+  </dialog>
+
+
+
+  <dialog id="adminDialog" class="admin-dialog">
+    <form id="adminForm" class="admin-form">
+      <button type="button" class="x" id="closeAdmin" aria-label="ปิด">×</button>
+      <h2>ผู้ดูแลระบบ</h2>
+      <p class="form-help">รหัสผู้ดูแลจะเก็บไว้เฉพาะ session นี้ และไม่ถูกบันทึกลงไฟล์เว็บไซต์</p>
+      <label class="form-field">Admin token
+        <input id="adminTokenInput" type="password" autocomplete="off" placeholder="ใส่ token จาก Cloudflare Worker">
+      </label>
+      <p class="form-error" id="adminError" hidden></p>
+      <div class="admin-actions">
+        <button type="submit" class="primary">เข้าสู่โหมดผู้ดูแล</button>
+        <button type="button" class="secondary" id="adminLogout" hidden>ออกจากโหมดผู้ดูแล</button>
+      </div>
+      <section id="adminDanger" class="admin-danger" hidden>
+        <h3>จัดการข้อมูล</h3>
+        <p>ผู้ดูแลสามารถแก้ไข คลี่คลาย หรือลบรายงานทุกหมุดได้</p>
+        <button type="button" class="danger" id="adminClearAll">ล้างรายงานสถานการณ์ทั้งหมด</button>
+      </section>
     </form>
   </dialog>
 

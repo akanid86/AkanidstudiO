@@ -40,3 +40,7 @@ main{height:auto!important;flex:1;min-height:0}
   .report-fab{right:14px;bottom:14px;width:58px;height:58px;font-size:2.1rem;box-shadow:0 6px 20px #102a4360}
   #modeBadge{bottom:16px;max-width:calc(100% - 95px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
+
+/* v0.9 clean slate + admin ------------------------------------------------ */
+.header-actions{display:flex;align-items:center;gap:8px}.admin-entry{border:1px solid #c8d1dc;background:#fff;color:#243249;border-radius:999px;padding:8px 12px;font-weight:750;font-size:.76rem}.admin-entry.active{background:#173b55;color:#fff;border-color:#173b55}.admin-dialog{width:min(92vw,430px)}.admin-form{padding:20px}.admin-actions{display:flex;gap:8px;flex-wrap:wrap}.admin-actions>*{flex:1}.admin-danger{margin-top:16px;padding-top:14px;border-top:1px solid #e6ebf0}.admin-danger h3{margin:0 0 6px}.admin-danger p{font-size:.78rem;color:#5b6b7c;line-height:1.5}.admin-danger .danger{width:100%}
+@media(max-width:760px){.admin-entry{padding:7px 9px;font-size:.7rem}header span{max-width:58vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}

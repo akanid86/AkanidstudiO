@@ -1,4 +1,4 @@
-// Flood Map — Mae Klong Basin prototype v0.8
+// Flood Map — Mae Klong Basin prototype v0.9
 // GERARAI ER + REAL WATER CONNECTIONS
 // Rule: hydrological connection lines are NEVER invented. Every visible route segment
 // comes directly from OpenStreetMap geometry returned by Overpass. No dam-to-dam
@@ -32,7 +32,11 @@ baseMap.on('tileerror', () => {
 // backend must be separate from GERARAI production and enforce CAPTCHA/rate limits.
 // ---------------------------------------------------------------------------
 const E = window.GerarAIEmergency;
-const REPORT_STORE_KEY = 'maeklong-emergency-v06-local';
+const API_BASE = String(window.MAEKLONG_API_BASE || 'https://api.maeklong.online').replace(/\/$/,'');
+const REPORT_STORE_KEY = 'maeklong-emergency-v09-local';
+const OWNER_STORE_KEY = 'maeklong-owner-tokens-v1';
+const CLEAN_SLATE_KEY = 'maeklong-v09-clean-slate-done';
+const LEGACY_REPORT_KEYS = ['maeklong-emergency-v06-local','maeklong-emergency-v07-local','maeklong-emergency-v08-local'];
 const emergencyLayer = L.layerGroup().addTo(map);
 const floodAreaLayer = L.layerGroup().addTo(map);
 let currentMode = 'live';
@@ -50,6 +54,9 @@ const routeLayer = L.layerGroup().addTo(map);
 const canalLayer = L.layerGroup().addTo(map);
 const basinLayer = L.layerGroup();
 const controlLayer = L.layerGroup().addTo(map);
+let apiOnline = false;
+let adminToken = sessionStorage.getItem('maeklong-admin-token') || '';
+let isAdmin = false;
 let reports = loadReports();
 
 const FLOOD_LEVEL_STYLE = {
@@ -63,20 +70,64 @@ const FLOOD_LEVEL_STYLE = {
 };
 const WHEN = [['0','ตอนนี้'],['15','15 นาทีที่แล้ว'],['30','30 นาทีที่แล้ว'],['60','1 ชม. ที่แล้ว']];
 
+function clearLegacyReportDataOnce(){
+  try{
+    if(localStorage.getItem(CLEAN_SLATE_KEY)) return;
+    LEGACY_REPORT_KEYS.forEach(k=>localStorage.removeItem(k));
+    localStorage.removeItem(REPORT_STORE_KEY);
+    localStorage.setItem(CLEAN_SLATE_KEY,'1');
+  }catch(_){/* ignore */}
+}
 function loadReports(){
+  clearLegacyReportDataOnce();
   try{
     const raw=localStorage.getItem(REPORT_STORE_KEY);
     if(raw){const rows=JSON.parse(raw);if(Array.isArray(rows))return rows;}
   }catch(_){/* ignore */}
-  const now=Date.now();
-  return [
-    makeReport({id:'demo-flood',type_code:'flood',latitude:13.548,longitude:100.274,location_precision:'approximate',reported_at:new Date(now-18*60000).toISOString(),water_depth:'ankle',vehicle_access:'general_passable',note:'ตัวอย่างข้อมูลสาธิต'}),
-    makeReport({id:'demo-road',type_code:'road_blocked',latitude:13.409,longitude:100.001,location_precision:'approximate',reported_at:new Date(now-42*60000).toISOString(),vehicle_access:'general_impassable',note:'ตัวอย่างข้อมูลสาธิต'}),
-    makeReport({id:'demo-help',type_code:'help_request',latitude:13.521,longitude:100.184,location_precision:'approximate',reported_at:new Date(now-12*60000).toISOString(),need_code:'water',people_count:3,note:'ข้อมูลตัวอย่าง'}),
-  ];
+  return [];
 }
 function saveReports(){
-  try{localStorage.setItem(REPORT_STORE_KEY,JSON.stringify(reports.filter(r=>!String(r.id).startsWith('demo-'))));}catch(_){/* ignore */}
+  try{localStorage.setItem(REPORT_STORE_KEY,JSON.stringify(reports.filter(r=>String(r.id||'').startsWith('local-'))));}catch(_){/* ignore */}
+}
+function ownerTokens(){
+  try{return JSON.parse(localStorage.getItem(OWNER_STORE_KEY)||'{}')||{};}catch(_){return {};}
+}
+function ownerTokenFor(id){return ownerTokens()[String(id)]||'';}
+function rememberOwnerToken(id,token){
+  if(!id||!token)return;
+  const m=ownerTokens();m[String(id)]=token;
+  try{localStorage.setItem(OWNER_STORE_KEY,JSON.stringify(m));}catch(_){/* ignore */}
+}
+function forgetOwnerToken(id){
+  const m=ownerTokens();delete m[String(id)];
+  try{localStorage.setItem(OWNER_STORE_KEY,JSON.stringify(m));}catch(_){/* ignore */}
+}
+async function apiRequest(path,opts={}){
+  const headers={Accept:'application/json',...(opts.headers||{})};
+  if(opts.body && !headers['Content-Type'])headers['Content-Type']='application/json';
+  const res=await fetch(API_BASE+path,{...opts,headers});
+  let data=null; try{data=await res.json();}catch(_){data=null;}
+  if(!res.ok) throw new Error(data?.error||`HTTP ${res.status}`);
+  return data;
+}
+async function refreshReportsFromBackend(){
+  try{
+    const data=await apiRequest('/api/reports');
+    if(!Array.isArray(data?.reports)) throw new Error('รูปแบบข้อมูลไม่ถูกต้อง');
+    apiOnline=true; reports=data.reports; updateStoreStatus(); renderEmergency();
+  }catch(err){
+    apiOnline=false; reports=loadReports(); updateStoreStatus(); renderEmergency();
+    console.warn('Backend unavailable; local fallback active',err);
+  }
+}
+function updateStoreStatus(){
+  const el=document.getElementById('reportStoreStatus'); if(!el)return;
+  if(apiOnline) el.textContent=isAdmin?'เชื่อมฐานข้อมูลกลางแล้ว • โหมดผู้ดูแลเปิดอยู่':'เชื่อมฐานข้อมูลกลางแล้ว • รายงานจะแสดงให้ผู้ใช้ทุกคนเห็น';
+  else el.textContent='ยังไม่เชื่อมฐานข้อมูลกลาง • รายงานชั่วคราวจะอยู่เฉพาะเครื่องนี้';
+}
+function reportAuthHeaders(id){
+  if(isAdmin&&adminToken)return {'Authorization':`Bearer ${adminToken}`};
+  const t=ownerTokenFor(id); return t?{'X-Report-Token':t}:{};
 }
 function makeReport(d){
   const rule=E.ruleMap().get(d.type_code) || {ttl_minutes:360};
@@ -100,8 +151,9 @@ function emergencyPinIcon(report,selected=false){
   });
 }
 function isOwnedLocalReport(r){
-  return String(r?.id||'').startsWith('local-');
+  return String(r?.id||'').startsWith('local-') || !!ownerTokenFor(r?.id);
 }
+function canManageReport(r){return isAdmin || isOwnedLocalReport(r);}
 function reportPopup(r){
   const rule=E.ruleMap().get(r.type_code)||{icon:'📍',label_th:r.type_code};
   const f=E.freshness(r,null,Date.now());
@@ -112,12 +164,12 @@ function reportPopup(r){
   if(r.need_code) bits.push(`ต้องการ: ${E.label(E.NEEDS,r.need_code)}`);
   if(r.people_count) bits.push(`ประมาณ ${r.people_count} คน`);
   const stale=E.staleWarning(r,null,Date.now());
-  const owned=isOwnedLocalReport(r);
-  const actions=owned ? `<div class="report-actions">
+  const manageable=canManageReport(r);
+  const actions=manageable ? `<div class="report-actions">
     <button type="button" data-report-action="edit" data-report-id="${escapeHtml(r.id)}">✏️ อัปเดตสถานการณ์</button>
     ${r.emergency_status!=='resolved'?`<button type="button" data-report-action="resolve" data-report-id="${escapeHtml(r.id)}">✅ คลี่คลายแล้ว</button>`:''}
     <button type="button" class="report-delete" data-report-action="delete" data-report-id="${escapeHtml(r.id)}">🗑️ ลบหมุด</button>
-  </div><p class="form-help">จัดการได้เฉพาะรายงานที่สร้างจากเบราว์เซอร์เครื่องนี้</p>` : '';
+  </div><p class="form-help">${isAdmin?'โหมดผู้ดูแล: แก้ไข/ลบรายงานนี้ได้':'คุณแก้ไขรายงานนี้ได้จากอุปกรณ์ที่สร้างรายงาน'}</p>` : '';
   return `<div class="emergency-detail"><div class="emg-detail-head"><div><strong>${rule.icon} ${escapeHtml(rule.label_th)}</strong><div class="emg-chips-row"><span class="emg-fresh emg-${f.state}">${escapeHtml(f.label)}</span><span class="emg-source">รายงานจากชุมชน</span></div></div></div><p class="emg-headline">${escapeHtml(E.headline(r))}</p>${bits.length?`<p>${bits.map(escapeHtml).join('<br>')}</p>`:''}${r.note?`<p class="emg-note">${escapeHtml(r.note)}</p>`:''}${stale?`<span class="emg-stale">${escapeHtml(stale)}</span>`:''}<ul class="emg-times">${lines.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul><p class="form-help">${escapeHtml(E.PRECISION_LABEL[r.location_precision]||'')}</p>${actions}</div>`;
 }
 
@@ -238,9 +290,10 @@ function setPicked(lat,lng,source='map',accuracy=null){
   document.getElementById('picked').textContent=`${sourceText}: ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}${acc}`;
 }
 function formRadio(name){return document.querySelector(`#reportForm [name="${name}"]:checked`)?.value||'';}
-function submitReport(e){
+async function submitReport(e){
   e.preventDefault();
   const err=document.getElementById('formError');
+  const submit=document.getElementById('submitReportBtn');
   if(!picked){err.textContent='ระบุตำแหน่งบนแผนที่หรือใช้ GPS';err.hidden=false;return;}
   const mins=Number(formRadio('when')||0);
   const d={
@@ -252,19 +305,37 @@ function submitReport(e){
   if(selectedType==='help_request'){d.need_code=formRadio('need_code');const pc=document.getElementById('peopleCount')?.value;if(pc)d.people_count=Number(pc);}
   const validation=E.validateDraft(d);
   if(validation){err.textContent=validation;err.hidden=false;return;}
-  if(editingReportId){
-    const idx=reports.findIndex(r=>r.id===editingReportId);
-    if(idx>=0){
+  err.hidden=true; submit.disabled=true; submit.textContent=editingReportId?'กำลังบันทึก…':'กำลังส่ง…';
+  try{
+    if(editingReportId){
+      const idx=reports.findIndex(r=>String(r.id)===String(editingReportId));
+      if(idx<0)throw new Error('ไม่พบรายงานที่ต้องการแก้ไข');
       const old=reports[idx];
-      reports[idx]=makeReport({id:old.id,created_at:old.created_at,updated_at:new Date().toISOString(),...d});
+      if(apiOnline && !String(old.id).startsWith('local-')){
+        const data=await apiRequest(`/api/reports/${encodeURIComponent(old.id)}`,{method:'PATCH',headers:reportAuthHeaders(old.id),body:JSON.stringify(d)});
+        reports[idx]=data.report;
+      }else{
+        if(!canManageReport(old))throw new Error('ไม่มีสิทธิ์แก้ไขรายงานนี้');
+        reports[idx]=makeReport({id:old.id,created_at:old.created_at,updated_at:new Date().toISOString(),...d});
+        saveReports();
+      }
+    }else if(apiOnline){
+      const data=await apiRequest('/api/reports',{method:'POST',body:JSON.stringify(d)});
+      reports.push(data.report);
+      if(data.owner_token)rememberOwnerToken(data.report.id,data.owner_token);
+    }else{
+      reports.push(makeReport({id:`local-${Date.now()}`,...d}));
+      saveReports();
     }
-  }else{
-    reports.push(makeReport({id:`local-${Date.now()}`,...d}));
+    selectedFilter='';renderFilters();renderEmergency();
+    document.getElementById('reportDialog').close();
+    editingReportId=null; picked=null; pickedSource=''; pickedAccuracy=null; pickerBar(false);
+    updateStoreStatus();
+  }catch(ex){
+    err.textContent=`บันทึกไม่สำเร็จ: ${ex.message||ex}`;err.hidden=false;
+  }finally{
+    submit.disabled=false; submit.textContent=editingReportId?'บันทึกการอัปเดต':'ส่งรายงาน';
   }
-  saveReports();
-  selectedFilter='';renderFilters();renderEmergency();
-  document.getElementById('reportDialog').close();
-  editingReportId=null; picked=null; pickedSource=''; pickedAccuracy=null; pickerBar(false);
 }
 
 renderFilters();
@@ -580,7 +651,7 @@ function setMode(mode){
   const live=mode==='live', basin=mode==='basin';
   document.getElementById('liveCard').hidden=!live;
   document.getElementById('emergencyCard').hidden=!live;
-  // Basin text cards are intentionally reserved/hidden in v0.8; map layers remain available.
+  // Basin text cards are intentionally reserved/hidden in v0.9; map layers remain available.
   document.getElementById('basinCard').hidden=true;
   document.getElementById('dataCard').hidden=true;
   document.getElementById('reportBtn').disabled=!live;
@@ -642,22 +713,76 @@ document.getElementById('reportDialog').addEventListener('cancel',e=>{e.preventD
 document.getElementById('reportDialog').addEventListener('click',e=>{if(e.target===e.currentTarget)cancelReportFlow();});
 document.getElementById('reportForm').addEventListener('submit',submitReport);
 
-document.addEventListener('click',e=>{
+document.addEventListener('click',async e=>{
   const btn=e.target.closest('[data-report-action]'); if(!btn)return;
   const id=btn.dataset.reportId, action=btn.dataset.reportAction;
   const r=reports.find(x=>String(x.id)===String(id));
-  if(!r || !isOwnedLocalReport(r))return;
+  if(!r || !canManageReport(r))return;
   if(action==='edit'){map.closePopup();openReport(r.type_code,r);return;}
   if(action==='resolve'){
-    r.emergency_status='resolved'; r.updated_at=new Date().toISOString(); r.resolved_at=r.updated_at;
-    saveReports();map.closePopup();renderEmergency();return;
+    try{
+      if(apiOnline && !String(r.id).startsWith('local-')){
+        const data=await apiRequest(`/api/reports/${encodeURIComponent(r.id)}`,{method:'PATCH',headers:reportAuthHeaders(r.id),body:JSON.stringify({emergency_status:'resolved'})});
+        const idx=reports.findIndex(x=>String(x.id)===String(r.id)); if(idx>=0)reports[idx]=data.report;
+      }else{
+        r.emergency_status='resolved'; r.updated_at=new Date().toISOString(); r.resolved_at=r.updated_at; saveReports();
+      }
+      map.closePopup();renderEmergency();
+    }catch(ex){alert(`อัปเดตไม่สำเร็จ: ${ex.message||ex}`);}
+    return;
   }
   if(action==='delete'){
-    if(!confirm('ลบหมุดนี้ออกจากเครื่องนี้ใช่ไหม? การลบย้อนกลับไม่ได้'))return;
-    reports=reports.filter(x=>String(x.id)!==String(id));
-    saveReports();map.closePopup();renderEmergency();
+    if(!confirm(isAdmin?'ลบรายงานนี้ออกจากระบบใช่ไหม?':'ลบหมุดนี้ใช่ไหม? การลบย้อนกลับไม่ได้'))return;
+    try{
+      if(apiOnline && !String(r.id).startsWith('local-')) await apiRequest(`/api/reports/${encodeURIComponent(r.id)}`,{method:'DELETE',headers:reportAuthHeaders(r.id)});
+      reports=reports.filter(x=>String(x.id)!==String(r.id)); forgetOwnerToken(r.id); saveReports(); map.closePopup();renderEmergency();
+    }catch(ex){alert(`ลบไม่สำเร็จ: ${ex.message||ex}`);}
   }
 });
+
+function updateAdminUi(){
+  const btn=document.getElementById('adminBtn');
+  if(btn){btn.classList.toggle('active',isAdmin);btn.textContent=isAdmin?'🔓 ผู้ดูแลเปิดอยู่':'🔐 ผู้ดูแล';}
+  const logout=document.getElementById('adminLogout'); if(logout)logout.hidden=!isAdmin;
+  const danger=document.getElementById('adminDanger'); if(danger)danger.hidden=!isAdmin;
+  updateStoreStatus();
+}
+function openAdminDialog(){
+  const dlg=document.getElementById('adminDialog');
+  document.getElementById('adminError').hidden=true;
+  document.getElementById('adminTokenInput').value='';
+  updateAdminUi(); if(!dlg.open)dlg.showModal();
+}
+document.getElementById('adminBtn').onclick=openAdminDialog;
+document.getElementById('closeAdmin').onclick=()=>document.getElementById('adminDialog').close();
+document.getElementById('adminDialog').addEventListener('cancel',e=>{e.preventDefault();e.currentTarget.close();});
+document.getElementById('adminDialog').addEventListener('click',e=>{if(e.target===e.currentTarget)e.currentTarget.close();});
+document.getElementById('adminForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const err=document.getElementById('adminError');
+  const token=document.getElementById('adminTokenInput').value.trim();
+  if(!token){err.textContent='กรุณาใส่ Admin token';err.hidden=false;return;}
+  try{
+    await apiRequest('/api/admin/verify',{method:'POST',headers:{Authorization:`Bearer ${token}`}});
+    adminToken=token; isAdmin=true; apiOnline=true;
+    sessionStorage.setItem('maeklong-admin-token',token);
+    updateAdminUi(); await refreshReportsFromBackend();
+    document.getElementById('adminDialog').close();
+  }catch(ex){err.textContent=`เข้าสู่โหมดผู้ดูแลไม่ได้: ${ex.message||ex}`;err.hidden=false;}
+});
+document.getElementById('adminLogout').onclick=()=>{
+  adminToken='';isAdmin=false;sessionStorage.removeItem('maeklong-admin-token');updateAdminUi();renderEmergency();
+};
+document.getElementById('adminClearAll').onclick=async()=>{
+  if(!isAdmin)return;
+  if(!confirm('ล้างรายงานสถานการณ์ทั้งหมดออกจากฐานข้อมูลใช่ไหม? การกระทำนี้ย้อนกลับไม่ได้'))return;
+  if(!confirm('ยืนยันอีกครั้ง: ต้องการล้างข้อมูลรายงานทั้งหมดจริง ๆ ใช่ไหม?'))return;
+  try{
+    if(apiOnline)await apiRequest('/api/admin/reports',{method:'DELETE',headers:{Authorization:`Bearer ${adminToken}`}});
+    reports=[]; saveReports(); renderEmergency();
+    alert('ล้างรายงานสถานการณ์แล้ว');
+  }catch(ex){alert(`ล้างข้อมูลไม่สำเร็จ: ${ex.message||ex}`);}
+};
 
 document.getElementById('freshOnly').onchange=renderEmergency;
 document.getElementById('historyToggle').onchange=renderEmergency;
@@ -670,7 +795,10 @@ document.getElementById('controlToggle').onchange=e=>{if(e.target.checked){contr
 
 renderEmergency();
 setMode('live');
+updateAdminUi();
+updateStoreStatus();
+refreshReportsFromBackend();
 loadConnectionRoutes();
 scheduleCanalLoad(900);
 setTimeout(loadNamedControls,1400);
-setInterval(renderEmergency,60000);
+setInterval(()=>{renderEmergency(); if(apiOnline)refreshReportsFromBackend();},60000);
