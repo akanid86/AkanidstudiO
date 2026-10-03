@@ -1,5 +1,5 @@
-// Flood Map — Mae Klong Basin prototype v0.5
-// REAL WATER CONNECTIONS
+// Flood Map — Mae Klong Basin prototype v0.6
+// GERARAI ER + REAL WATER CONNECTIONS
 // Rule: hydrological connection lines are NEVER invented. Every visible route segment
 // comes directly from OpenStreetMap geometry returned by Overpass. No dam-to-dam
 // straight lines, no interpolation, and no manual geometry to close data gaps.
@@ -24,25 +24,173 @@ baseMap.on('tileerror', () => {
   }
 });
 
-const reports = [
-  {id:1,type:'flood',lat:13.548,lng:100.274,level:.25,car:'ผ่านได้',walk:'ผ่านได้',note:'ตัวอย่างข้อมูลสาธิต',time:Date.now()-18*60000},
-  {id:2,type:'flood',lat:13.409,lng:100.001,level:.55,car:'ผ่านลำบาก',walk:'ไม่ควรผ่าน',note:'ตัวอย่างข้อมูลสาธิต',time:Date.now()-42*60000},
-  {id:3,type:'help',lat:13.521,lng:100.184,level:.9,car:'ผ่านไม่ได้',walk:'ไม่ควรผ่าน',note:'ต้องการน้ำดื่ม (ข้อมูลสาธิต)',time:Date.now()-12*60000}
-];
 
-let picked = null;
+// ---------------------------------------------------------------------------
+// GERARAI Emergency Discovery UI/logic port
+// Source basis: GERARAI phase13 emergency-core.js / emergency-ui.js.
+// This standalone prototype keeps reports in localStorage only. The production
+// backend must be separate from GERARAI production and enforce CAPTCHA/rate limits.
+// ---------------------------------------------------------------------------
+const E = window.GerarAIEmergency;
+const REPORT_STORE_KEY = 'maeklong-emergency-v06-local';
+const emergencyLayer = L.layerGroup().addTo(map);
 let heat = null;
 let currentMode = 'live';
+let picked = null;
+let pickOnMap = false;
+let selectedType = 'flood';
+let selectedFilter = '';
 let routeLoading = false;
 let canalLoading = false;
 let canalFetchTimer = null;
-
-const floodLayer = L.layerGroup().addTo(map);
-const helpLayer = L.layerGroup().addTo(map);
 const routeLayer = L.layerGroup().addTo(map);
 const canalLayer = L.layerGroup().addTo(map);
 const basinLayer = L.layerGroup();
 const controlLayer = L.layerGroup().addTo(map);
+let reports = loadReports();
+
+const DEPTH_WEIGHT = {wet:.15,ankle:.3,shin:.45,knee:.62,waist:.82,above_waist:1,unknown:.2};
+const WHEN = [['0','ตอนนี้'],['15','15 นาทีที่แล้ว'],['30','30 นาทีที่แล้ว'],['60','1 ชม. ที่แล้ว']];
+
+function loadReports(){
+  try{
+    const raw=localStorage.getItem(REPORT_STORE_KEY);
+    if(raw){const rows=JSON.parse(raw);if(Array.isArray(rows))return rows;}
+  }catch(_){/* ignore */}
+  const now=Date.now();
+  return [
+    makeReport({id:'demo-flood',type_code:'flood',latitude:13.548,longitude:100.274,location_precision:'approximate',reported_at:new Date(now-18*60000).toISOString(),water_depth:'ankle',vehicle_access:'general_passable',note:'ตัวอย่างข้อมูลสาธิต'}),
+    makeReport({id:'demo-road',type_code:'road_blocked',latitude:13.409,longitude:100.001,location_precision:'approximate',reported_at:new Date(now-42*60000).toISOString(),vehicle_access:'general_impassable',note:'ตัวอย่างข้อมูลสาธิต'}),
+    makeReport({id:'demo-help',type_code:'help_request',latitude:13.521,longitude:100.184,location_precision:'approximate',reported_at:new Date(now-12*60000).toISOString(),need_code:'water',people_count:3,note:'ข้อมูลตัวอย่าง'}),
+  ];
+}
+function saveReports(){
+  try{localStorage.setItem(REPORT_STORE_KEY,JSON.stringify(reports.filter(r=>!String(r.id).startsWith('demo-'))));}catch(_){/* ignore */}
+}
+function makeReport(d){
+  const rule=E.ruleMap().get(d.type_code) || {ttl_minutes:360};
+  const t=new Date(d.reported_at||Date.now());
+  return {emergency_status:'active',source_type:'community',created_at:d.created_at||new Date().toISOString(),...d,expires_at:d.expires_at||new Date(t.getTime()+rule.ttl_minutes*60000).toISOString()};
+}
+function emergencyPinIcon(report,selected=false){
+  const rule=E.ruleMap().get(report.type_code)||{icon:'📍',label_th:report.type_code};
+  const f=E.freshness(report,null,Date.now());
+  const cls=`emg-pin emg-${f.state} ${selected?'selected':''}`;
+  return L.divIcon({className:'emergency-marker',html:`<span class="${cls}"><b>${rule.icon}</b><i>${f.label}</i></span>`,iconSize:[44,50],iconAnchor:[22,45],popupAnchor:[0,-44]});
+}
+function reportPopup(r){
+  const rule=E.ruleMap().get(r.type_code)||{icon:'📍',label_th:r.type_code};
+  const f=E.freshness(r,null,Date.now());
+  const lines=E.timeLines(r,null,Date.now());
+  const bits=[];
+  if(r.water_depth) bits.push(`ระดับน้ำ: ${E.label(E.DEPTHS,r.water_depth)}`);
+  if(r.vehicle_access) bits.push(`รถ: ${E.label(E.VEHICLES,r.vehicle_access)}`);
+  if(r.need_code) bits.push(`ต้องการ: ${E.label(E.NEEDS,r.need_code)}`);
+  if(r.people_count) bits.push(`ประมาณ ${r.people_count} คน`);
+  const stale=E.staleWarning(r,null,Date.now());
+  return `<div class="emergency-detail"><div class="emg-detail-head"><div><strong>${rule.icon} ${escapeHtml(rule.label_th)}</strong><div class="emg-chips-row"><span class="emg-fresh emg-${f.state}">${escapeHtml(f.label)}</span><span class="emg-source">รายงานจากชุมชน</span></div></div></div><p class="emg-headline">${escapeHtml(E.headline(r))}</p>${bits.length?`<p>${bits.map(escapeHtml).join('<br>')}</p>`:''}${r.note?`<p class="emg-note">${escapeHtml(r.note)}</p>`:''}${stale?`<span class="emg-stale">${escapeHtml(stale)}</span>`:''}<ul class="emg-times">${lines.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul><p class="form-help">${escapeHtml(E.PRECISION_LABEL[r.location_precision]||'')}</p></div>`;
+}
+function visibleReports(){
+  const history=document.getElementById('historyToggle')?.checked;
+  const freshOnly=document.getElementById('freshOnly')?.checked;
+  return reports.filter(r=>{
+    const f=E.freshness(r,null,Date.now());
+    if(selectedFilter && r.type_code!==selectedFilter)return false;
+    if(!history && !f.current)return false;
+    if(freshOnly && f.state!=='fresh')return false;
+    return true;
+  });
+}
+function renderEmergency(){
+  emergencyLayer.clearLayers();
+  const rows=visibleReports();
+  let flood=0,help=0,other=0;
+  const heatPts=[];
+  rows.forEach(r=>{
+    if(r.type_code==='flood'){
+      flood++;
+      const f=E.freshness(r,null,Date.now());
+      const ageFactor=f.state==='fresh'?1:f.state==='aging'?.65:.25;
+      heatPts.push([r.latitude,r.longitude,(DEPTH_WEIGHT[r.water_depth]||.2)*ageFactor]);
+    }else if(r.type_code==='help_request')help++; else other++;
+    if(document.getElementById('emergencyToggle')?.checked){
+      L.marker([r.latitude,r.longitude],{icon:emergencyPinIcon(r)})
+        .bindPopup(reportPopup(r),{maxWidth:340})
+        .addTo(emergencyLayer);
+    }
+  });
+  if(heat && map.hasLayer(heat))map.removeLayer(heat);
+  heat=L.heatLayer(heatPts,{radius:38,blur:28,maxZoom:15,minOpacity:.25});
+  if(document.getElementById('heatToggle')?.checked && currentMode==='live')heat.addTo(map);
+  document.getElementById('floodCount').textContent=flood;
+  document.getElementById('helpCount').textContent=help;
+  document.getElementById('otherCount').textContent=other;
+}
+function renderFilters(){
+  const box=document.getElementById('emgFilters');
+  const list=[['','ทั้งหมด'],...E.FALLBACK_RULES.map(r=>[r.type_code,`${r.icon} ${r.label_th}`])];
+  box.innerHTML=list.map(([code,label])=>`<button type="button" data-filter="${code}" class="${selectedFilter===code?'active':''}">${escapeHtml(label)}</button>`).join('');
+  box.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{selectedFilter=b.dataset.filter;renderFilters();renderEmergency();});
+}
+function chips(name,list,current){
+  return `<div class="emg-chips">${list.map(([v,t])=>`<label class="emg-chip"><input type="radio" name="${name}" value="${v}" ${String(current)===String(v)?'checked':''}><span>${escapeHtml(t)}</span></label>`).join('')}</div>`;
+}
+function renderTypeGrid(preselect='flood'){
+  const grid=document.getElementById('typeGrid');
+  grid.innerHTML=E.FALLBACK_RULES.map(r=>`<label class="emg-type"><input type="radio" name="type_code" value="${r.type_code}" ${r.type_code===preselect?'checked':''}><span><b>${r.icon}</b>${escapeHtml(r.label_th)}</span></label>`).join('');
+  grid.querySelectorAll('[name=type_code]').forEach(i=>i.onchange=()=>{selectedType=i.value;renderTypeFields();});
+}
+function renderTypeFields(){
+  const rule=E.ruleMap().get(selectedType)||E.FALLBACK_RULES[0];
+  const specific=document.getElementById('typeSpecific');
+  let html='';
+  if(selectedType==='flood')html=`<p class="emg-sub">ระดับน้ำ</p>${chips('water_depth',E.DEPTHS,'unknown')}<p class="emg-sub">การผ่านของรถ (ตามที่คุณเห็น)</p>${chips('vehicle_access',E.VEHICLES,'unknown')}`;
+  else if(selectedType==='road_passable'||selectedType==='road_blocked')html=`<p class="emg-sub">การผ่านของรถ (ตามที่คุณเห็น)</p>${chips('vehicle_access',E.VEHICLES,selectedType==='road_blocked'?'general_impassable':'general_passable')}`;
+  else if(selectedType==='help_request')html=`<p class="emg-sub">ต้องการอะไร</p>${chips('need_code',E.NEEDS,'water')}<label class="form-field">จำนวนคนโดยประมาณ (ไม่บังคับ)<input id="peopleCount" type="number" min="1" max="999" inputmode="numeric"></label><p class="form-help">อย่าใส่ชื่อ เบอร์โทร บ้านเลขที่ หรือข้อมูลส่วนตัวในรายงานสาธารณะ</p>`;
+  else html='<p class="form-help">เลือกตำแหน่งและใส่รายละเอียดสั้น ๆ ได้เลย</p>';
+  specific.innerHTML=html;
+  const defaultPrecision=(selectedType==='help_request'&&rule.allowed_precisions.includes('approximate'))?'approximate':rule.allowed_precisions[0];
+  document.getElementById('precisionChips').innerHTML=chips('location_precision',rule.allowed_precisions.map(p=>[p,E.PRECISION_LABEL[p]]),defaultPrecision);
+  document.getElementById('helpNotice').hidden=selectedType!=='help_request';
+}
+function openReport(type='flood'){
+  if(currentMode!=='live')setMode('live');
+  selectedType=type;
+  picked=null; pickOnMap=false;
+  document.getElementById('picked').textContent='ยังไม่ได้เลือกตำแหน่ง';
+  document.getElementById('note').value='';
+  document.getElementById('formError').hidden=true;
+  renderTypeGrid(type); renderTypeFields();
+  document.getElementById('whenChips').innerHTML=chips('when',WHEN,'0');
+  document.getElementById('formTitle').textContent=type==='help_request'?'ขอความช่วยเหลือ':'แจ้งสถานการณ์';
+  document.getElementById('reportDialog').showModal();
+}
+function setPicked(lat,lng){
+  picked=L.latLng(+lat,+lng);
+  document.getElementById('picked').textContent=`ตำแหน่ง: ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}`;
+}
+function formRadio(name){return document.querySelector(`#reportForm [name="${name}"]:checked`)?.value||'';}
+function submitReport(e){
+  e.preventDefault();
+  const err=document.getElementById('formError');
+  if(!picked){err.textContent='ระบุตำแหน่งบนแผนที่หรือใช้ GPS';err.hidden=false;return;}
+  const mins=Number(formRadio('when')||0);
+  const d={
+    type_code:selectedType,location_precision:formRadio('location_precision'),latitude:picked.lat,longitude:picked.lng,
+    reported_at:new Date(Date.now()-mins*60000).toISOString(),note:document.getElementById('note').value.trim()
+  };
+  if(selectedType==='flood'){d.water_depth=formRadio('water_depth');d.vehicle_access=formRadio('vehicle_access');}
+  if(['road_passable','road_blocked'].includes(selectedType))d.vehicle_access=formRadio('vehicle_access');
+  if(selectedType==='help_request'){d.need_code=formRadio('need_code');const pc=document.getElementById('peopleCount')?.value;if(pc)d.people_count=Number(pc);}
+  const validation=E.validateDraft(d);
+  if(validation){err.textContent=validation;err.hidden=false;return;}
+  reports.push(makeReport({id:`local-${Date.now()}`,...d}));
+  saveReports();
+  selectedFilter='';renderFilters();renderEmergency();
+  document.getElementById('reportDialog').close();
+}
+
+renderFilters();
 
 // ---------------------------------------------------------------------------
 // DAMS / WATER CONTROL STRUCTURES
@@ -347,132 +495,61 @@ map.on('moveend zoomend',()=>{
   setTimeout(loadNamedControls,850);
 });
 
-function age(t){
-  const m=Math.round((Date.now()-t)/60000);
-  return m<60 ? `${m} นาทีที่แล้ว` : `${Math.round(m/60)} ชม.ที่แล้ว`;
-}
-function renderReports(){
-  floodLayer.clearLayers();
-  helpLayer.clearLayers();
-  const heatPts=[];
-  let f=0,h=0;
-  reports.forEach(r=>{
-    const fresh=Math.max(.2,1-(Date.now()-r.time)/(6*3600000));
-    if(r.type==='flood'){
-      f++;
-      heatPts.push([r.lat,r.lng,Math.min(1,r.level*fresh)]);
-      L.circleMarker([r.lat,r.lng],{radius:7,weight:2,fillOpacity:.9})
-        .bindPopup(`<b>รายงานน้ำท่วม</b><br>ระดับประมาณ ${r.level} ม.<br>รถเล็ก: ${r.car}<br>คนเดิน: ${r.walk}<br>${r.note||''}<br><small>${age(r.time)}</small>`)
-        .addTo(floodLayer);
-    }else{
-      h++;
-      L.marker([r.lat,r.lng])
-        .bindPopup(`<b>🆘 ขอความช่วยเหลือ</b><br>${r.note}<br><small>${age(r.time)}</small>`)
-        .addTo(helpLayer);
-    }
-  });
-  if(heat && map.hasLayer(heat)) map.removeLayer(heat);
-  heat=L.heatLayer(heatPts,{radius:38,blur:28,maxZoom:15,minOpacity:.25});
-  if(document.querySelector('#heatToggle').checked && currentMode==='live') heat.addTo(map);
-  document.querySelector('#floodCount').textContent=f;
-  document.querySelector('#helpCount').textContent=h;
-}
-renderReports();
+
 
 function setMode(mode){
-  currentMode = mode;
+  currentMode=mode;
   document.querySelectorAll('.mode').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
-  const live = mode==='live';
-  const basin = mode==='basin';
-
-  document.getElementById('liveCard').hidden = !live;
-  document.getElementById('basinCard').hidden = !basin;
-  document.getElementById('reportBtn').disabled = !live;
-  document.getElementById('helpBtn').disabled = !live;
-
-  if(map.hasLayer(basinLayer)) map.removeLayer(basinLayer);
-  if(heat && map.hasLayer(heat)) map.removeLayer(heat);
-
+  const live=mode==='live', basin=mode==='basin';
+  document.getElementById('liveCard').hidden=!live;
+  document.getElementById('emergencyCard').hidden=!live;
+  document.getElementById('basinCard').hidden=!basin;
+  document.getElementById('reportBtn').disabled=!live;
+  document.getElementById('helpBtn').disabled=!live;
+  if(map.hasLayer(basinLayer))map.removeLayer(basinLayer);
+  if(heat&&map.hasLayer(heat))map.removeLayer(heat);
   if(live){
-    document.getElementById('modeBadge').textContent='LIVE • รายงานประชาชน';
+    document.getElementById('modeBadge').textContent='LIVE • รายงานสถานการณ์';
     map.setView([13.62,99.95],9);
-    if(document.querySelector('#heatToggle').checked) heat.addTo(map);
-    if(document.querySelector('#basinToggle').checked) basinLayer.addTo(map);
-  }
-  if(basin){
+    if(document.getElementById('heatToggle').checked)heat?.addTo(map);
+    if(document.getElementById('basinToggle').checked)basinLayer.addTo(map);
+  }else{
     document.getElementById('modeBadge').textContent='BASIN • เส้นทางน้ำจริง';
-    basinLayer.addTo(map);
-    map.fitBounds(BASIN_VIEW);
+    basinLayer.addTo(map);map.fitBounds(BASIN_VIEW);
   }
-  loadConnectionRoutes();
-  scheduleCanalLoad(600);
+  loadConnectionRoutes();scheduleCanalLoad(600);
 }
-
 document.querySelectorAll('.mode').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
 
-map.on('click',e=>{
-  if(currentMode!=='live') return;
-  picked=e.latlng;
-  document.querySelector('#picked').textContent=`จุดที่เลือก: ${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`;
+map.on('click',ev=>{
+  if(currentMode!=='live'||!pickOnMap)return;
+  setPicked(ev.latlng.lat,ev.latlng.lng);
+  pickOnMap=false;
+  document.getElementById('reportDialog').showModal();
 });
 
-const dlg=document.querySelector('#reportDialog');
-function openForm(type){
-  if(currentMode!=='live') setMode('live');
-  document.querySelector('#reportType').value=type;
-  document.querySelector('#formTitle').textContent=type==='help'?'ขอความช่วยเหลือ':'ส่งรายงานน้ำท่วม';
-  document.querySelector('#helpFields').hidden=type!=='help';
-  picked=null;
-  document.querySelector('#picked').textContent='ยังไม่ได้เลือกตำแหน่ง';
-  dlg.showModal();
-}
-document.querySelector('#reportBtn').onclick=()=>openForm('flood');
-document.querySelector('#helpBtn').onclick=()=>openForm('help');
-
-document.querySelector('#locateBtn').onclick=()=>{
-  if(!navigator.geolocation) return;
-  navigator.geolocation.getCurrentPosition(p=>{
-    const ll=L.latLng(p.coords.latitude,p.coords.longitude);
-    picked=ll;
-    map.setView(ll,14);
-    document.querySelector('#picked').textContent=`ตำแหน่ง: ${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)}`;
-  },()=>document.querySelector('#picked').textContent='อ่าน GPS ไม่สำเร็จ กรุณาจิ้มแผนที่');
+document.getElementById('reportBtn').onclick=()=>openReport('flood');
+document.getElementById('helpBtn').onclick=()=>openReport('help_request');
+document.getElementById('closeReport').onclick=()=>document.getElementById('reportDialog').close();
+document.getElementById('locateBtn').onclick=()=>{
+  if(!navigator.geolocation)return;
+  navigator.geolocation.getCurrentPosition(p=>{setPicked(p.coords.latitude,p.coords.longitude);map.setView(picked,14);},()=>{document.getElementById('picked').textContent='อ่าน GPS ไม่สำเร็จ กรุณาเลือกบนแผนที่';});
 };
+document.getElementById('pickOnMapBtn').onclick=()=>{pickOnMap=true;document.getElementById('reportDialog').close();const msg=document.getElementById('mapStatus');msg.hidden=false;msg.textContent='แตะตำแหน่งบนแผนที่ 1 ครั้งเพื่อปักหมุด';setTimeout(()=>{if(msg.textContent.includes('แตะตำแหน่ง'))msg.hidden=true;},5000);};
+document.getElementById('reportForm').addEventListener('submit',submitReport);
 
-document.querySelector('#reportForm').addEventListener('submit',e=>{
-  e.preventDefault();
-  if(!picked){alert('กรุณาเลือกตำแหน่งบนแผนที่ก่อน');return;}
-  const type=document.querySelector('#reportType').value;
-  reports.push({
-    id:Date.now(), type,
-    lat:picked.lat, lng:picked.lng,
-    level:+document.querySelector('#level').value,
-    car:document.querySelector('#car').value,
-    walk:document.querySelector('#walk').value,
-    note:type==='help'?`${document.querySelector('#need').value} • ${document.querySelector('#people').value} คน • ${document.querySelector('#note').value}`:document.querySelector('#note').value,
-    time:Date.now()
-  });
-  renderReports();
-  dlg.close();
-});
+document.getElementById('freshOnly').onchange=renderEmergency;
+document.getElementById('historyToggle').onchange=renderEmergency;
+document.getElementById('heatToggle').onchange=e=>{if(currentMode!=='live')return;e.target.checked?heat?.addTo(map):heat&&map.removeLayer(heat);};
+document.getElementById('emergencyToggle').onchange=e=>{if(e.target.checked){emergencyLayer.addTo(map);renderEmergency();}else map.removeLayer(emergencyLayer);};
+document.getElementById('routeToggle').onchange=e=>{if(e.target.checked){routeLayer.addTo(map);loadConnectionRoutes();}else map.removeLayer(routeLayer);};
+document.getElementById('waterToggle').onchange=e=>{if(e.target.checked){canalLayer.addTo(map);scheduleCanalLoad(50);}else map.removeLayer(canalLayer);};
+document.getElementById('basinToggle').onchange=e=>e.target.checked?basinLayer.addTo(map):map.removeLayer(basinLayer);
+document.getElementById('controlToggle').onchange=e=>{if(e.target.checked){controlLayer.addTo(map);loadNamedControls();}else map.removeLayer(controlLayer);};
 
-document.querySelector('#heatToggle').onchange=e=>{
-  if(currentMode!=='live') return;
-  e.target.checked?heat.addTo(map):map.removeLayer(heat);
-};
-document.querySelector('#routeToggle').onchange=e=>{
-  if(e.target.checked){routeLayer.addTo(map);loadConnectionRoutes();}
-  else map.removeLayer(routeLayer);
-};
-document.querySelector('#waterToggle').onchange=e=>{
-  if(e.target.checked){canalLayer.addTo(map);scheduleCanalLoad(50);}
-  else map.removeLayer(canalLayer);
-};
-document.querySelector('#basinToggle').onchange=e=>e.target.checked?basinLayer.addTo(map):map.removeLayer(basinLayer);
-document.querySelector('#controlToggle').onchange=e=>{if(e.target.checked){controlLayer.addTo(map);loadNamedControls();}else map.removeLayer(controlLayer);};
-document.querySelector('#helpToggle').onchange=e=>e.target.checked?helpLayer.addTo(map):map.removeLayer(helpLayer);
-
+renderEmergency();
 setMode('live');
 loadConnectionRoutes();
 scheduleCanalLoad(900);
 setTimeout(loadNamedControls,1400);
+setInterval(renderEmergency,60000);

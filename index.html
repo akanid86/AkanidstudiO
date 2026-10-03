@@ -12,12 +12,12 @@
   <header>
     <div>
       <strong>น้ำท่วมบ้านเรา</strong>
-      <span>ลุ่มน้ำแม่กลอง • Prototype v0.5 • REAL WATER CONNECTIONS</span>
+      <span>ลุ่มน้ำแม่กลอง • Prototype v0.6 • GERARAI ER UI</span>
     </div>
     <button id="alertsBtn" aria-label="ประกาศ">🔔 <b id="alertCount">1</b></button>
   </header>
 
-  <div class="official">⚠️ <b>ข้อมูลเพื่อการเฝ้าระวัง</b> <span>เส้นเชื่อมเขื่อนใช้ geometry ทางน้ำจาก OpenStreetMap เท่านั้น • ไม่ลากเส้นตรงและไม่เติมช่องว่างเอง</span></div>
+  <div class="official">⚠️ <b>ข้อมูลเพื่อการเฝ้าระวัง</b> <span>ระบบรายงานและหมุดยกแนวทางจาก GERARAI Emergency Discovery • ข้อมูลจากชุมชนไม่ใช่ประกาศทางการ</span></div>
 
   <div class="modebar" role="tablist" aria-label="โหมดแผนที่">
     <button class="mode active" data-mode="live">LIVE</button>
@@ -27,27 +27,37 @@
   <main>
     <div id="map">
       <div id="mapStatus" hidden></div>
-      <div id="modeBadge">LIVE • รายงานประชาชน</div>
+      <div id="modeBadge">LIVE • รายงานสถานการณ์</div>
     </div>
 
     <aside id="panel">
       <section class="card" id="liveCard">
         <h2>สถานการณ์ตอนนี้</h2>
         <div class="stats">
-          <div><b id="floodCount">0</b><span>จุดน้ำท่วม</span></div>
+          <div><b id="floodCount">0</b><span>น้ำท่วม</span></div>
           <div><b id="helpCount">0</b><span>ขอความช่วยเหลือ</span></div>
-          <div><b>2</b><span>สถานีน้ำทะเล</span></div>
+          <div><b id="otherCount">0</b><span>ข้อมูลอื่น</span></div>
         </div>
+      </section>
+
+      <section class="card" id="emergencyCard">
+        <h3>รายงานสถานการณ์</h3>
+        <div class="emg-filters" id="emgFilters"></div>
+        <div class="emg-toggles">
+          <label><input id="freshOnly" type="checkbox"> เฉพาะรายงานใหม่</label>
+          <label><input id="historyToggle" type="checkbox"> แสดงหมดอายุ/คลี่คลายแล้ว</label>
+        </div>
+        <p class="mini-note" id="reportStoreStatus">Prototype: รายงานเก็บในเครื่องนี้จนกว่าจะต่อ backend แยก</p>
       </section>
 
       <section class="card" id="layerCard">
         <h3>ชั้นข้อมูล</h3>
         <label><input id="heatToggle" type="checkbox" checked> ฮีตแมประดับน้ำ</label>
+        <label><input id="emergencyToggle" type="checkbox" checked> หมุดสถานการณ์ GERARAI ER</label>
         <label><input id="routeToggle" type="checkbox" checked> เส้นทางน้ำจริงเชื่อมเขื่อน</label>
         <label><input id="waterToggle" type="checkbox" checked> คลองหลักที่มีชื่อ</label>
         <label><input id="basinToggle" type="checkbox"> กรอบศึกษาลุ่มน้ำ (Prototype)</label>
         <label><input id="controlToggle" type="checkbox" checked> เขื่อน / ประตูระบายน้ำ</label>
-        <label><input id="helpToggle" type="checkbox" checked> ขอความช่วยเหลือ</label>
       </section>
 
       <section class="card env" id="dataCard">
@@ -72,46 +82,60 @@
   </main>
 
   <nav>
-    <button id="reportBtn" class="primary">＋ ส่งรายงาน</button>
+    <button id="reportBtn" class="primary">＋ แจ้งสถานการณ์</button>
     <button id="helpBtn" class="danger">🆘 ขอความช่วยเหลือ</button>
   </nav>
 
   <dialog id="reportDialog">
-    <form method="dialog" id="reportForm">
-      <button class="x" value="cancel" aria-label="ปิด">×</button>
-      <h2 id="formTitle">ส่งรายงานน้ำท่วม</h2>
-      <input type="hidden" id="reportType" value="flood">
-      <label>น้ำสูงแค่ไหน?
-        <select id="level">
-          <option value="0.1">น้ำขังเล็กน้อย</option>
-          <option value="0.25">ถึงข้อเท้า</option>
-          <option value="0.5">ถึงเข่า</option>
-          <option value="0.9">ถึงเอว</option>
-          <option value="1.3">สูงกว่าเอว</option>
-        </select>
+    <form id="reportForm" class="emergency-form">
+      <button type="button" class="x" id="closeReport" aria-label="ปิด">×</button>
+      <h2 id="formTitle">แจ้งสถานการณ์</h2>
+
+      <fieldset>
+        <legend>1. เกิดอะไรขึ้น?</legend>
+        <div class="emg-type-grid" id="typeGrid"></div>
+      </fieldset>
+
+      <fieldset id="dynamicFields">
+        <legend>2. รายละเอียด</legend>
+        <div id="typeSpecific"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>3. อยู่ที่ไหน?</legend>
+        <div id="precisionChips"></div>
+        <p class="hint">แตะแผนที่ด้านหลังหลังปิดหน้าต่างชั่วคราว หรือใช้ GPS</p>
+        <div class="location-actions">
+          <button type="button" class="secondary" id="locateBtn">📍 ใช้ตำแหน่งฉัน</button>
+          <button type="button" class="secondary" id="pickOnMapBtn">🗺️ เลือกบนแผนที่</button>
+        </div>
+        <p id="picked">ยังไม่ได้เลือกตำแหน่ง</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>4. เห็นเมื่อไหร่?</legend>
+        <div class="emg-chips" id="whenChips"></div>
+      </fieldset>
+
+      <label class="form-field">รายละเอียดเพิ่มเติม (ไม่บังคับ)
+        <textarea id="note" maxlength="300" placeholder="เช่น น้ำกำลังขึ้นเร็ว หรือมีสิ่งกีดขวาง"></textarea>
       </label>
-      <label>รถเล็กผ่านได้ไหม?
-        <select id="car"><option>ผ่านได้</option><option>ผ่านลำบาก</option><option>ผ่านไม่ได้</option><option>ไม่แน่ใจ</option></select>
-      </label>
-      <label>คนเดินผ่านได้ไหม?
-        <select id="walk"><option>ผ่านได้</option><option>ไม่ควรผ่าน</option><option>ไม่แน่ใจ</option></select>
-      </label>
-      <label>หมายเหตุ (ไม่บังคับ)<textarea id="note" maxlength="160" placeholder="เช่น น้ำกำลังขึ้นเร็ว"></textarea></label>
-      <section id="helpFields" hidden>
-        <label>ต้องการอะไร?<select id="need"><option>อาหาร / น้ำดื่ม</option><option>ยารักษาโรค</option><option>เรือ / การอพยพ</option><option>ช่วยผู้ติดค้าง</option><option>อื่น ๆ</option></select></label>
-        <label>จำนวนคน<input id="people" type="number" min="1" max="99" value="1"></label>
-        <label>รูปภาพ (เฉพาะขอความช่วยเหลือ)<input id="photo" type="file" accept="image/*"></label>
-      </section>
-      <div class="captcha">☑ CAPTCHA placeholder — ต้องต่อ backend ก่อนใช้งานจริง</div>
-      <p class="hint">แตะแผนที่เพื่อเลือกจุด หรือใช้ตำแหน่งปัจจุบัน</p>
-      <button type="button" id="locateBtn">📍 ใช้ตำแหน่งฉัน</button>
-      <p id="picked">ยังไม่ได้เลือกตำแหน่ง</p>
+
+      <div id="helpNotice" hidden class="emg-help-notice">
+        <strong>การโพสต์ขอความช่วยเหลือบนเว็บไซต์นี้ไม่ใช่การแจ้งเหตุไปยังหน่วยงานฉุกเฉินโดยอัตโนมัติ</strong>
+        <p>ถ้าอันตรายถึงชีวิตหรือต้องการความช่วยเหลือด่วน ติดต่อหน่วยงานโดยตรง:</p>
+        <div class="emg-hotlines"><a class="secondary" href="tel:1669">📞 1669 · การแพทย์ฉุกเฉิน</a><a class="secondary" href="tel:1784">📞 1784 · สาธารณภัย (ปภ.)</a></div>
+      </div>
+
+      <div class="captcha">☑ CAPTCHA placeholder — production ต้องตรวจ CAPTCHA + rate limit ที่ backend</div>
+      <p class="form-error" id="formError" hidden></p>
       <button type="submit" class="primary full">ส่งรายงาน</button>
     </form>
   </dialog>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+  <script src="emergency-core.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
