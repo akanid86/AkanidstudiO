@@ -1,5 +1,6 @@
-// Flood Map — Mae Klong Basin prototype v0.3
-// REAL WATERWAYS: waterway geometries are loaded from OpenStreetMap via Overpass API.
+// Flood Map — Mae Klong Basin prototype v0.4
+// MAJOR WATERWAYS: named rivers + curated major named canals only. Geometry is loaded from OpenStreetMap via Overpass API.
+// Hydraulic structures: verified seed points + named OSM control structures. Google Maps is used only as a visual cross-check link, not scraped as a dataset.
 // The basin outline is still a study envelope (NOT an official basin boundary).
 // Public Overpass endpoints are suitable for prototype/light use only; production should host a curated GeoJSON/vector-tile snapshot.
 
@@ -39,6 +40,62 @@ const helpLayer = L.layerGroup().addTo(map);
 const waterLayer = L.layerGroup().addTo(map);
 const basinLayer = L.layerGroup();
 const infographicLayer = L.layerGroup();
+const controlLayer = L.layerGroup().addTo(map);
+
+// ---------------------------------------------------------------------------
+// DAMS / WATER CONTROL STRUCTURES
+// Seed coordinates are from public/official references; each popup includes a
+// Google Maps check link so the user can visually verify the point.
+// ---------------------------------------------------------------------------
+const HYDRAULIC_STRUCTURES = [
+  {name:'เขื่อนศรีนครินทร์', kind:'เขื่อน', lat:14.40861, lng:99.12833, water:'แม่น้ำแควใหญ่', agency:'กฟผ.', source:'EGAT / public geodata'},
+  {name:'เขื่อนวชิราลงกรณ', kind:'เขื่อน', lat:14.79940, lng:98.59690, water:'แม่น้ำแควน้อย', agency:'กฟผ.', source:'EGAT / ThaiWater reference'},
+  {name:'เขื่อนแม่กลอง', kind:'เขื่อนทดน้ำ', lat:13.95479, lng:99.62501, water:'แม่น้ำแม่กลอง', agency:'กรมชลประทาน / กฟผ.', source:'RID / EGAT / public geodata'},
+  {name:'ประตูน้ำบางนกแขวก', kind:'ประตูระบายน้ำ', lat:13.4709927, lng:99.9405064, water:'คลองดำเนินสะดวก ↔ แม่น้ำแม่กลอง', agency:'กรมชลประทาน', source:'กระทรวงวัฒนธรรม / RID'}
+];
+
+function googleMapsUrl(lat,lng){
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lat+','+lng)}`;
+}
+function controlIcon(kind){
+  const symbol = kind.includes('ประตู') ? '▥' : '▲';
+  return L.divIcon({className:'control-div-icon',html:`<span>${symbol}</span>`,iconSize:[28,28],iconAnchor:[14,14]});
+}
+function addSeedControls(){
+  HYDRAULIC_STRUCTURES.forEach(s=>{
+    const popup=`<b>${escapeHtml(s.name)}</b><br>${escapeHtml(s.kind)} • ${escapeHtml(s.water)}<br><small>${escapeHtml(s.agency)} • ${escapeHtml(s.source)}</small><br><a href="${googleMapsUrl(s.lat,s.lng)}" target="_blank" rel="noopener">เปิดพิกัดตรวจสอบใน Google Maps ↗</a>`;
+    L.marker([s.lat,s.lng],{icon:controlIcon(s.kind)}).bindTooltip(s.name,{direction:'top'}).bindPopup(popup).addTo(controlLayer);
+  });
+}
+addSeedControls();
+
+let controlLoading=false;
+const seenControlFeatures=new Set();
+function buildControlQuery(bounds){
+  const s=bounds.getSouth().toFixed(5), w=bounds.getWest().toFixed(5), n=bounds.getNorth().toFixed(5), e=bounds.getEast().toFixed(5);
+  return `[out:json][timeout:30];(nwr["name"]["waterway"~"^(dam|weir|lock_gate|sluice_gate)$"](${s},${w},${n},${e});nwr["name"]["barrier"="sluice_gate"](${s},${w},${n},${e}););out center tags;`;
+}
+async function loadNamedControls(){
+  if(controlLoading || !document.getElementById('controlToggle')?.checked || !map.hasLayer(controlLayer)) return;
+  const bounds=normalizedBounds(); if(!bounds) return;
+  controlLoading=true;
+  try{
+    const data=await overpassFetch(buildControlQuery(bounds));
+    for(const el of (data.elements||[])){
+      const id=`${el.type}/${el.id}`; if(seenControlFeatures.has(id)) continue;
+      const lat=el.lat ?? el.center?.lat, lng=el.lon ?? el.center?.lon;
+      const name=wayName(el.tags||{}); if(!lat || !lng || !name) continue;
+      if(HYDRAULIC_STRUCTURES.some(s=>Math.abs(s.lat-lat)<0.003 && Math.abs(s.lng-lng)<0.003)) continue;
+      seenControlFeatures.add(id);
+      const wt=el.tags?.waterway || el.tags?.barrier || 'control';
+      const kind=wt==='dam'?'เขื่อน':wt==='weir'?'ฝาย':'ประตู/อาคารควบคุมน้ำ';
+      L.marker([lat,lng],{icon:controlIcon(kind)}).bindTooltip(name,{direction:'top'})
+        .bindPopup(`<b>${escapeHtml(name)}</b><br>${kind}<br><small>ตำแหน่งจาก OpenStreetMap • ${id}</small><br><a href="${googleMapsUrl(lat,lng)}" target="_blank" rel="noopener">ตรวจใน Google Maps ↗</a>`)
+        .addTo(controlLayer);
+    }
+  }catch(err){ console.warn('control structures load failed',err); }
+  finally{controlLoading=false;}
+}
 
 // Study envelope only — NOT an official Mae Klong basin polygon.
 L.rectangle(BASIN_VIEW, {
@@ -64,29 +121,44 @@ const OVERPASS_ENDPOINTS = [
 ];
 const WATER_CACHE_TTL = 24 * 60 * 60 * 1000;
 const seenWaterWays = new Set();
-const waterStats = { river: 0, canal: 0, stream: 0, drain: 0, other: 0 };
+const waterStats = { river: 0, canal: 0, other: 0 };
+
+// Curated major canals. Names are kept intentionally short to avoid minor/local canal clutter.
+// The list is based on major named canals visible in common map references and relevant to the Mae Klong/Tha Chin connection.
+const MAJOR_CANAL_KEYWORDS = [
+  'ดำเนินสะดวก','damnoen saduak',
+  'ภาษีเจริญ','phasi charoen',
+  'มหาชัย','mahachai',
+  'สุนัขหอน','sunak hon','sunakhon',
+  'บางนกแขวก','bang nok khwaek','bang nok kwaek',
+  'จินดา','jinda'
+];
 
 function waterStatus(text){
   const el = document.getElementById('waterStatus');
   if(el) el.textContent = text;
 }
 
-function requestedWaterTypes(zoom){
-  if(zoom < 8) return ['river'];
-  if(zoom < 11) return ['river','canal'];
-  if(zoom < 13) return ['river','canal','stream'];
-  return ['river','canal','stream','drain'];
+function requestedWaterTypes(){
+  return ['river','canal'];
 }
 
 function waterStyle(type){
   const z = map.getZoom();
   const styles = {
-    river:  { weight: z >= 11 ? 4.2 : 3.2, opacity: .82 },
-    canal:  { weight: z >= 12 ? 3.0 : 2.2, opacity: .72, dashArray: z >= 12 ? null : '7 4' },
-    stream: { weight: 1.6, opacity: .58 },
-    drain:  { weight: 1.1, opacity: .45, dashArray: '3 5' }
+    river:  { weight: z >= 11 ? 4.8 : 3.6, opacity: .86 },
+    canal:  { weight: z >= 12 ? 3.4 : 2.6, opacity: .78 }
   };
-  return styles[type] || { weight: 1.2, opacity: .45 };
+  return styles[type] || { weight: 1.8, opacity: .55 };
+}
+
+function normalizedName(name=''){
+  return String(name).trim().toLowerCase().replace(/คลอง/g,'').replace(/\s+/g,' ');
+}
+
+function isMajorCanal(name=''){
+  const n=normalizedName(name);
+  return !!n && MAJOR_CANAL_KEYWORDS.some(k=>n.includes(k.toLowerCase().replace(/คลอง/g,'')));
 }
 
 function escapeHtml(s=''){
@@ -97,11 +169,11 @@ function wayName(tags={}){
   return tags['name:th'] || tags.name || tags['name:en'] || '';
 }
 
-function buildOverpassQuery(bounds, types){
+function buildOverpassQuery(bounds){
   const s=bounds.getSouth().toFixed(5), w=bounds.getWest().toFixed(5),
         n=bounds.getNorth().toFixed(5), e=bounds.getEast().toFixed(5);
-  const typeRegex = types.join('|');
-  return `[out:json][timeout:35];way["waterway"~"^(${typeRegex})$"](${s},${w},${n},${e});out tags geom;`;
+  // Rivers: named only. Canals: named only, then client-side curated major-name filter.
+  return `[out:json][timeout:35];(way["waterway"="river"]["name"](${s},${w},${n},${e});way["waterway"="canal"]["name"](${s},${w},${n},${e}););out tags geom;`;
 }
 
 function normalizedBounds(){
@@ -118,7 +190,7 @@ function normalizedBounds(){
 function cacheKey(bounds, types){
   // Coarse rounding means nearby pans can reuse the same prototype cache.
   const r=x=>(Math.round(x*10)/10).toFixed(1);
-  return `water-v03:${types.join(',')}:${r(bounds.getSouth())},${r(bounds.getWest())},${r(bounds.getNorth())},${r(bounds.getEast())}`;
+  return `water-v04-major:${types.join(',')}:${r(bounds.getSouth())},${r(bounds.getWest())},${r(bounds.getNorth())},${r(bounds.getEast())}`;
 }
 
 function cacheGet(key){
@@ -162,10 +234,12 @@ function addWaterWays(data){
     seenWaterWays.add(unique);
     const tags=el.tags||{};
     const type=tags.waterway||'other';
+    const name=wayName(tags);
+    if(type==='canal' && !isMajorCanal(name)) continue;
+    if(type==='river' && !name) continue;
     const coords=el.geometry.map(p=>[p.lat,p.lon]);
     const line=L.polyline(coords,waterStyle(type));
-    const name=wayName(tags);
-    const typeTh={river:'แม่น้ำ',canal:'คลอง',stream:'ลำห้วย/ลำธาร',drain:'ทางระบายน้ำ'}[type]||type;
+    const typeTh={river:'แม่น้ำหลัก',canal:'คลองหลัก'}[type]||type;
     const label=name ? `${escapeHtml(name)} • ${typeTh}` : typeTh;
     line.bindTooltip(label,{sticky:true});
     line.bindPopup(`<b>${label}</b><br><small>OpenStreetMap way ${el.id}</small>`);
@@ -179,16 +253,15 @@ function addWaterWays(data){
 async function loadRealWaterways(){
   if(waterLoading || !document.getElementById('waterToggle').checked || !map.hasLayer(waterLayer)) return;
   const bounds=normalizedBounds(); if(!bounds) return;
-  const zoom=map.getZoom();
-  const types=requestedWaterTypes(zoom);
+  const types=requestedWaterTypes();
   const key=cacheKey(bounds,types);
   waterLoading=true;
-  waterStatus(`กำลังโหลด ${types.join(' / ')}…`);
+  waterStatus('กำลังโหลดแม่น้ำหลัก / คลองหลักที่มีชื่อ…');
   try{
     let data=cacheGet(key);
     let source='cache';
     if(!data){
-      data=await overpassFetch(buildOverpassQuery(bounds,types));
+      data=await overpassFetch(buildOverpassQuery(bounds));
       cachePut(key,data); source='OSM สด';
     }
     const added=addWaterWays(data);
@@ -205,7 +278,7 @@ function scheduleWaterLoad(delay=450){
   waterFetchTimer=setTimeout(loadRealWaterways,delay);
 }
 
-map.on('moveend zoomend',()=>scheduleWaterLoad());
+map.on('moveend zoomend',()=>{scheduleWaterLoad();setTimeout(loadNamedControls,850);});
 
 function age(t){
   const m=Math.round((Date.now()-t)/60000);
@@ -333,7 +406,9 @@ document.querySelector('#waterToggle').onchange=e=>{
   else map.removeLayer(waterLayer);
 };
 document.querySelector('#basinToggle').onchange=e=>e.target.checked?basinLayer.addTo(map):map.removeLayer(basinLayer);
+document.querySelector('#controlToggle').onchange=e=>{if(e.target.checked){controlLayer.addTo(map);loadNamedControls();}else map.removeLayer(controlLayer);};
 document.querySelector('#helpToggle').onchange=e=>e.target.checked?helpLayer.addTo(map):map.removeLayer(helpLayer);
 
 setMode('live');
 scheduleWaterLoad(900);
+setTimeout(loadNamedControls,1400);
