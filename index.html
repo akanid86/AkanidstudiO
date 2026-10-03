@@ -12,7 +12,7 @@
   <header>
     <div>
       <strong>น้ำท่วมบ้านเรา</strong>
-      <span>ลุ่มน้ำแม่กลอง • Prototype v0.7 • GERARAI ER UI</span>
+      <span>ลุ่มน้ำแม่กลอง • Prototype v0.8 • GERARAI ER UI</span>
     </div>
     <button id="alertsBtn" aria-label="ประกาศ">🔔 <b id="alertCount">1</b></button>
   </header>
@@ -28,6 +28,7 @@
     <div id="map">
       <div id="mapStatus" hidden></div>
       <div id="modeBadge">LIVE • รายงานสถานการณ์</div>
+      <button id="reportBtn" class="report-fab" type="button" aria-label="แจ้งสถานการณ์" title="แจ้งสถานการณ์">＋</button>
       <div id="mapPickBar" class="map-pick-bar" hidden>
         <div><strong>📍 กำลังเลือกตำแหน่ง</strong><span>แตะแผนที่ 1 ครั้ง หรือใช้ GPS ปัจจุบัน</span></div>
         <div class="map-pick-actions">
@@ -60,15 +61,22 @@
 
       <section class="card" id="layerCard">
         <h3>ชั้นข้อมูล</h3>
-        <label><input id="heatToggle" type="checkbox" checked> ฮีตแมประดับน้ำ</label>
-        <label><input id="emergencyToggle" type="checkbox" checked> หมุดสถานการณ์ GERARAI ER</label>
+        <label><input id="heatToggle" type="checkbox" checked> สีพื้นที่ตามระดับน้ำ</label>
+        <div class="flood-level-legend" aria-label="สีระดับน้ำ">
+          <span><i style="--c:#9bd9ff"></i>เริ่มขัง</span>
+          <span><i style="--c:#62bfff"></i>ข้อเท้า</span>
+          <span><i style="--c:#5668d8"></i>เข่า</span>
+          <span><i style="--c:#8a43b8"></i>เอว</span>
+          <span><i style="--c:#c72f63"></i>สูงกว่าเอว</span>
+        </div>
+        <label><input id="emergencyToggle" type="checkbox" checked> หมุดข้อมูลอื่น</label>
         <label><input id="routeToggle" type="checkbox" checked> เส้นทางน้ำจริงเชื่อมเขื่อน</label>
         <label><input id="waterToggle" type="checkbox" checked> คลองหลักที่มีชื่อ</label>
         <label><input id="basinToggle" type="checkbox"> กรอบศึกษาลุ่มน้ำ (Prototype)</label>
         <label><input id="controlToggle" type="checkbox" checked> เขื่อน / ประตูระบายน้ำ</label>
       </section>
 
-      <section class="card env" id="dataCard">
+      <section class="card env reserved-basin-info" id="dataCard" hidden data-reserved="true">
         <h3>ข้อมูลลุ่มน้ำ</h3>
         <p>🔗 ทางน้ำเชื่อมเขื่อน: <b id="routeStatus">รอโหลดเส้นทางจริง</b></p>
         <p>🗺️ คลองหลัก: <b id="waterStatus">รอโหลดข้อมูลจริง</b></p>
@@ -78,7 +86,7 @@
         <p>💧 การระบายน้ำ: <b>รอ API/แหล่งทางการ</b></p>
       </section>
 
-      <section class="card basin-info" id="basinCard" hidden>
+      <section class="card basin-info reserved-basin-info" id="basinCard" hidden data-reserved="true">
         <h3>เส้นทางน้ำจริงของระบบแม่กลอง</h3>
         <p><b>สาขาแควใหญ่:</b> เขื่อนศรีนครินทร์ → เขื่อนท่าทุ่งนา → แม่น้ำแควใหญ่</p>
         <p><b>สาขาแควน้อย:</b> เขื่อนวชิราลงกรณ → แม่น้ำแควน้อย</p>
@@ -88,11 +96,6 @@
       </section>
     </aside>
   </main>
-
-  <nav>
-    <button id="reportBtn" class="primary">＋ แจ้งสถานการณ์</button>
-    <button id="helpBtn" class="danger">🆘 ขอความช่วยเหลือ</button>
-  </nav>
 
   <dialog id="reportDialog">
     <form id="reportForm" class="emergency-form">
@@ -142,7 +145,6 @@
   </dialog>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
   <script src="emergency-core.js"></script>
   <script src="app.js"></script>
 </body>

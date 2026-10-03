@@ -1,4 +1,4 @@
-// Flood Map — Mae Klong Basin prototype v0.7
+// Flood Map — Mae Klong Basin prototype v0.8
 // GERARAI ER + REAL WATER CONNECTIONS
 // Rule: hydrological connection lines are NEVER invented. Every visible route segment
 // comes directly from OpenStreetMap geometry returned by Overpass. No dam-to-dam
@@ -34,7 +34,7 @@ baseMap.on('tileerror', () => {
 const E = window.GerarAIEmergency;
 const REPORT_STORE_KEY = 'maeklong-emergency-v06-local';
 const emergencyLayer = L.layerGroup().addTo(map);
-let heat = null;
+const floodAreaLayer = L.layerGroup().addTo(map);
 let currentMode = 'live';
 let picked = null;
 let pickOnMap = false;
@@ -52,7 +52,15 @@ const basinLayer = L.layerGroup();
 const controlLayer = L.layerGroup().addTo(map);
 let reports = loadReports();
 
-const DEPTH_WEIGHT = {wet:.15,ankle:.3,shin:.45,knee:.62,waist:.82,above_waist:1,unknown:.2};
+const FLOOD_LEVEL_STYLE = {
+  wet:{color:'#9bd9ff',label:'น้ำเริ่มขัง'},
+  ankle:{color:'#62bfff',label:'ข้อเท้า'},
+  shin:{color:'#378fd3',label:'หน้าแข้ง'},
+  knee:{color:'#5668d8',label:'เข่า'},
+  waist:{color:'#8a43b8',label:'เอว'},
+  above_waist:{color:'#c72f63',label:'สูงกว่าเอว'},
+  unknown:{color:'#7891a5',label:'ไม่ทราบระดับ'}
+};
 const WHEN = [['0','ตอนนี้'],['15','15 นาทีที่แล้ว'],['30','30 นาทีที่แล้ว'],['60','1 ชม. ที่แล้ว']];
 
 function loadReports(){
@@ -78,8 +86,18 @@ function makeReport(d){
 function emergencyPinIcon(report,selected=false){
   const rule=E.ruleMap().get(report.type_code)||{icon:'📍',label_th:report.type_code};
   const f=E.freshness(report,null,Date.now());
-  const cls=`emg-pin emg-${f.state} ${selected?'selected':''}`;
-  return L.divIcon({className:'emergency-marker',html:`<span class="${cls}"><b>${rule.icon}</b><i>${f.label}</i></span>`,iconSize:[44,50],iconAnchor:[22,45],popupAnchor:[0,-44]});
+  const PIN_THEME={
+    help_request:'#d63b4a', road_blocked:'#d9534f', road_passable:'#2f8f6b', shelter:'#486fb3',
+    food_water:'#258fb5', medical:'#d94256', power_charging:'#d69b22', toilet:'#6e62a8',
+    shower:'#328fc4', recovered:'#3b9a67'
+  };
+  const pin=PIN_THEME[report.type_code]||'#3e6f8f';
+  const cls=`emg-drop emg-${f.state} ${selected?'selected':''}`;
+  return L.divIcon({
+    className:'emergency-marker',
+    html:`<span class="${cls}" style="--pin:${pin}" aria-label="${escapeHtml(rule.label_th)}"><b>${rule.icon}</b></span>`,
+    iconSize:[30,36],iconAnchor:[15,34],popupAnchor:[0,-31]
+  });
 }
 function isOwnedLocalReport(r){
   return String(r?.id||'').startsWith('local-');
@@ -114,31 +132,47 @@ function visibleReports(){
     return true;
   });
 }
+function floodRadiusM(r){
+  if(r.location_precision==='exact')return 420;
+  if(r.location_precision==='near')return 650;
+  return 950;
+}
+function drawFloodArea(r){
+  const f=E.freshness(r,null,Date.now());
+  const st=FLOOD_LEVEL_STYLE[r.water_depth]||FLOOD_LEVEL_STYLE.unknown;
+  const freshFactor=f.state==='fresh'?1:f.state==='aging'?.62:.28;
+  const radius=floodRadiusM(r);
+  // Soft outer halo: visual area only, not a claim that water fills this exact circle.
+  L.circle([r.latitude,r.longitude],{
+    radius:radius*1.35,stroke:false,fillColor:st.color,fillOpacity:.055*freshFactor,interactive:false
+  }).addTo(floodAreaLayer);
+  L.circle([r.latitude,r.longitude],{
+    radius,stroke:false,fillColor:st.color,fillOpacity:.22*freshFactor
+  }).bindPopup(reportPopup(r),{maxWidth:340}).addTo(floodAreaLayer);
+}
 function renderEmergency(){
   emergencyLayer.clearLayers();
+  floodAreaLayer.clearLayers();
   const rows=visibleReports();
   let flood=0,help=0,other=0;
-  const heatPts=[];
   rows.forEach(r=>{
     if(r.type_code==='flood'){
       flood++;
-      const f=E.freshness(r,null,Date.now());
-      const ageFactor=f.state==='fresh'?1:f.state==='aging'?.65:.25;
-      heatPts.push([r.latitude,r.longitude,(DEPTH_WEIGHT[r.water_depth]||.2)*ageFactor]);
-    }else if(r.type_code==='help_request')help++; else other++;
+      if(document.getElementById('heatToggle')?.checked && currentMode==='live')drawFloodArea(r);
+      return; // Flood reports are shown as colored areas, never as map pins.
+    }
+    if(r.type_code==='help_request')help++; else other++;
     if(document.getElementById('emergencyToggle')?.checked){
       L.marker([r.latitude,r.longitude],{icon:emergencyPinIcon(r)})
         .bindPopup(reportPopup(r),{maxWidth:340})
         .addTo(emergencyLayer);
     }
   });
-  if(heat && map.hasLayer(heat))map.removeLayer(heat);
-  heat=L.heatLayer(heatPts,{radius:38,blur:28,maxZoom:15,minOpacity:.25});
-  if(document.getElementById('heatToggle')?.checked && currentMode==='live')heat.addTo(map);
   document.getElementById('floodCount').textContent=flood;
   document.getElementById('helpCount').textContent=help;
   document.getElementById('otherCount').textContent=other;
 }
+// LOCKED UX: keep GERARAI ER filter choices/behavior stable unless explicitly revised.
 function renderFilters(){
   const box=document.getElementById('emgFilters');
   const list=[['','ทั้งหมด'],...E.FALLBACK_RULES.map(r=>[r.type_code,`${r.icon} ${r.label_th}`])];
@@ -546,15 +580,17 @@ function setMode(mode){
   const live=mode==='live', basin=mode==='basin';
   document.getElementById('liveCard').hidden=!live;
   document.getElementById('emergencyCard').hidden=!live;
-  document.getElementById('basinCard').hidden=!basin;
+  // Basin text cards are intentionally reserved/hidden in v0.8; map layers remain available.
+  document.getElementById('basinCard').hidden=true;
+  document.getElementById('dataCard').hidden=true;
   document.getElementById('reportBtn').disabled=!live;
-  document.getElementById('helpBtn').disabled=!live;
+  document.getElementById('reportBtn').hidden=!live;
   if(map.hasLayer(basinLayer))map.removeLayer(basinLayer);
-  if(heat&&map.hasLayer(heat))map.removeLayer(heat);
+  floodAreaLayer.clearLayers();
   if(live){
     document.getElementById('modeBadge').textContent='LIVE • รายงานสถานการณ์';
     map.setView([13.62,99.95],9);
-    if(document.getElementById('heatToggle').checked)heat?.addTo(map);
+    renderEmergency();
     if(document.getElementById('basinToggle').checked)basinLayer.addTo(map);
   }else{
     document.getElementById('modeBadge').textContent='BASIN • เส้นทางน้ำจริง';
@@ -592,7 +628,6 @@ function useCurrentGps(){
 }
 
 document.getElementById('reportBtn').onclick=()=>openReport('flood');
-document.getElementById('helpBtn').onclick=()=>openReport('help_request');
 document.getElementById('closeReport').onclick=cancelReportFlow;
 document.getElementById('locateBtn').onclick=useCurrentGps;
 document.getElementById('pickOnMapBtn').onclick=()=>{
@@ -626,7 +661,7 @@ document.addEventListener('click',e=>{
 
 document.getElementById('freshOnly').onchange=renderEmergency;
 document.getElementById('historyToggle').onchange=renderEmergency;
-document.getElementById('heatToggle').onchange=e=>{if(currentMode!=='live')return;e.target.checked?heat?.addTo(map):heat&&map.removeLayer(heat);};
+document.getElementById('heatToggle').onchange=()=>renderEmergency();
 document.getElementById('emergencyToggle').onchange=e=>{if(e.target.checked){emergencyLayer.addTo(map);renderEmergency();}else map.removeLayer(emergencyLayer);};
 document.getElementById('routeToggle').onchange=e=>{if(e.target.checked){routeLayer.addTo(map);loadConnectionRoutes();}else map.removeLayer(routeLayer);};
 document.getElementById('waterToggle').onchange=e=>{if(e.target.checked){canalLayer.addTo(map);scheduleCanalLoad(50);}else map.removeLayer(canalLayer);};

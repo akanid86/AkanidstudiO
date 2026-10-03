@@ -12,3 +12,31 @@
 /* v0.7 report location picker + local report management */
 .map-pick-bar{position:absolute;z-index:1100;left:50%;top:12px;transform:translateX(-50%);width:min(94%,760px);display:flex;align-items:center;justify-content:space-between;gap:12px;background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:10px 12px;box-shadow:0 8px 28px #102a4330}.map-pick-bar[hidden]{display:none}.map-pick-bar>div:first-child{display:flex;flex-direction:column;gap:2px}.map-pick-bar span{font-size:.72rem;color:#627d98}.map-pick-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}.map-pick-actions button{padding:8px 10px;font-size:.76rem}.map-pick-cancel{border:1px solid #e8b4b0;background:#fff3f2;color:#9b2c2c;border-radius:10px;font-weight:800}.report-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:9px;border-top:1px solid #e7edf3}.report-actions button{border:1px solid #c8d1dc;background:#fff;color:#243249;border-radius:9px;padding:7px 9px;font-weight:750;font-size:.72rem}.report-actions .report-delete{border-color:#e8b4b0;color:#9b2c2c;background:#fff8f7}
 @media(max-width:760px){.map-pick-bar{top:8px;align-items:stretch;flex-direction:column}.map-pick-actions{justify-content:stretch}.map-pick-actions button{flex:1}.report-actions button{flex:1 1 45%}}
+
+/* v0.8 simpler public UX -------------------------------------------------- */
+body{min-height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+main{height:auto!important;flex:1;min-height:0}
+.reserved-basin-info{display:none!important}
+.report-fab{position:absolute;z-index:950;right:14px;bottom:14px;width:56px;height:56px;border:0;border-radius:50%;background:#137c8b;color:#fff;font:800 2rem/1 system-ui,sans-serif;display:grid;place-items:center;box-shadow:0 6px 18px #102a4350;padding:0}
+.report-fab:hover{transform:translateY(-1px)}
+.report-fab:active{transform:translateY(1px)}
+.report-fab[hidden]{display:none!important}
+.flood-level-legend{display:flex;flex-wrap:wrap;gap:6px 10px;margin:4px 0 9px 23px;font-size:.66rem;color:#5b6b7c;line-height:1.2}
+.flood-level-legend span{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.flood-level-legend i{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--c);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 20%,transparent)}
+
+/* Small inverted water-drop pins for everything except flood level reports. */
+.emergency-marker{background:none!important;border:0!important}
+.emg-drop{--pin:#3e6f8f;position:relative;display:grid;place-items:center;width:27px;height:27px;border-radius:50% 50% 50% 0;background:var(--pin);border:2px solid #fff;box-shadow:0 2px 7px #0004;transform:rotate(-45deg);cursor:pointer}
+.emg-drop b{display:grid;place-items:center;width:22px;height:22px;transform:rotate(45deg);font-size:.8rem;line-height:1;font-weight:400}
+.emg-drop.emg-aging{opacity:.76}
+.emg-drop.emg-expired,.emg-drop.emg-resolved{opacity:.58;filter:grayscale(.65)}
+.emg-drop.selected{outline:3px solid #172740;outline-offset:2px}
+
+@media(max-width:760px){
+  main{height:auto!important;min-height:0}
+  #map{height:62%}
+  #panel{height:38%}
+  .report-fab{right:14px;bottom:14px;width:58px;height:58px;font-size:2.1rem;box-shadow:0 6px 20px #102a4360}
+  #modeBadge{bottom:16px;max-width:calc(100% - 95px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+}
