@@ -12,7 +12,7 @@
   <header>
     <div>
       <strong>น้ำท่วมบ้านเรา</strong>
-      <span>ลุ่มน้ำแม่กลอง • Prototype v0.6 • GERARAI ER UI</span>
+      <span>ลุ่มน้ำแม่กลอง • Prototype v0.7 • GERARAI ER UI</span>
     </div>
     <button id="alertsBtn" aria-label="ประกาศ">🔔 <b id="alertCount">1</b></button>
   </header>
@@ -28,6 +28,14 @@
     <div id="map">
       <div id="mapStatus" hidden></div>
       <div id="modeBadge">LIVE • รายงานสถานการณ์</div>
+      <div id="mapPickBar" class="map-pick-bar" hidden>
+        <div><strong>📍 กำลังเลือกตำแหน่ง</strong><span>แตะแผนที่ 1 ครั้ง หรือใช้ GPS ปัจจุบัน</span></div>
+        <div class="map-pick-actions">
+          <button type="button" class="secondary" id="mapPickGps">ใช้ GPS</button>
+          <button type="button" class="secondary" id="mapPickBack">กลับไปฟอร์ม</button>
+          <button type="button" class="map-pick-cancel" id="mapPickCancel">ยกเลิก</button>
+        </div>
+      </div>
     </div>
 
     <aside id="panel">
@@ -104,7 +112,7 @@
       <fieldset>
         <legend>3. อยู่ที่ไหน?</legend>
         <div id="precisionChips"></div>
-        <p class="hint">แตะแผนที่ด้านหลังหลังปิดหน้าต่างชั่วคราว หรือใช้ GPS</p>
+        <p class="hint">เลือกได้ทั้งจุดบนแผนที่ หรือพิกัด GPS ปัจจุบันของอุปกรณ์</p>
         <div class="location-actions">
           <button type="button" class="secondary" id="locateBtn">📍 ใช้ตำแหน่งฉัน</button>
           <button type="button" class="secondary" id="pickOnMapBtn">🗺️ เลือกบนแผนที่</button>
@@ -129,7 +137,7 @@
 
       <div class="captcha">☑ CAPTCHA placeholder — production ต้องตรวจ CAPTCHA + rate limit ที่ backend</div>
       <p class="form-error" id="formError" hidden></p>
-      <button type="submit" class="primary full">ส่งรายงาน</button>
+      <button type="submit" class="primary full" id="submitReportBtn">ส่งรายงาน</button>
     </form>
   </dialog>
 

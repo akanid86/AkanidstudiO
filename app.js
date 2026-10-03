@@ -1,4 +1,4 @@
-// Flood Map — Mae Klong Basin prototype v0.6
+// Flood Map — Mae Klong Basin prototype v0.7
 // GERARAI ER + REAL WATER CONNECTIONS
 // Rule: hydrological connection lines are NEVER invented. Every visible route segment
 // comes directly from OpenStreetMap geometry returned by Overpass. No dam-to-dam
@@ -39,6 +39,9 @@ let currentMode = 'live';
 let picked = null;
 let pickOnMap = false;
 let selectedType = 'flood';
+let editingReportId = null;
+let pickedSource = '';
+let pickedAccuracy = null;
 let selectedFilter = '';
 let routeLoading = false;
 let canalLoading = false;
@@ -78,6 +81,9 @@ function emergencyPinIcon(report,selected=false){
   const cls=`emg-pin emg-${f.state} ${selected?'selected':''}`;
   return L.divIcon({className:'emergency-marker',html:`<span class="${cls}"><b>${rule.icon}</b><i>${f.label}</i></span>`,iconSize:[44,50],iconAnchor:[22,45],popupAnchor:[0,-44]});
 }
+function isOwnedLocalReport(r){
+  return String(r?.id||'').startsWith('local-');
+}
 function reportPopup(r){
   const rule=E.ruleMap().get(r.type_code)||{icon:'📍',label_th:r.type_code};
   const f=E.freshness(r,null,Date.now());
@@ -88,8 +94,15 @@ function reportPopup(r){
   if(r.need_code) bits.push(`ต้องการ: ${E.label(E.NEEDS,r.need_code)}`);
   if(r.people_count) bits.push(`ประมาณ ${r.people_count} คน`);
   const stale=E.staleWarning(r,null,Date.now());
-  return `<div class="emergency-detail"><div class="emg-detail-head"><div><strong>${rule.icon} ${escapeHtml(rule.label_th)}</strong><div class="emg-chips-row"><span class="emg-fresh emg-${f.state}">${escapeHtml(f.label)}</span><span class="emg-source">รายงานจากชุมชน</span></div></div></div><p class="emg-headline">${escapeHtml(E.headline(r))}</p>${bits.length?`<p>${bits.map(escapeHtml).join('<br>')}</p>`:''}${r.note?`<p class="emg-note">${escapeHtml(r.note)}</p>`:''}${stale?`<span class="emg-stale">${escapeHtml(stale)}</span>`:''}<ul class="emg-times">${lines.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul><p class="form-help">${escapeHtml(E.PRECISION_LABEL[r.location_precision]||'')}</p></div>`;
+  const owned=isOwnedLocalReport(r);
+  const actions=owned ? `<div class="report-actions">
+    <button type="button" data-report-action="edit" data-report-id="${escapeHtml(r.id)}">✏️ อัปเดตสถานการณ์</button>
+    ${r.emergency_status!=='resolved'?`<button type="button" data-report-action="resolve" data-report-id="${escapeHtml(r.id)}">✅ คลี่คลายแล้ว</button>`:''}
+    <button type="button" class="report-delete" data-report-action="delete" data-report-id="${escapeHtml(r.id)}">🗑️ ลบหมุด</button>
+  </div><p class="form-help">จัดการได้เฉพาะรายงานที่สร้างจากเบราว์เซอร์เครื่องนี้</p>` : '';
+  return `<div class="emergency-detail"><div class="emg-detail-head"><div><strong>${rule.icon} ${escapeHtml(rule.label_th)}</strong><div class="emg-chips-row"><span class="emg-fresh emg-${f.state}">${escapeHtml(f.label)}</span><span class="emg-source">รายงานจากชุมชน</span></div></div></div><p class="emg-headline">${escapeHtml(E.headline(r))}</p>${bits.length?`<p>${bits.map(escapeHtml).join('<br>')}</p>`:''}${r.note?`<p class="emg-note">${escapeHtml(r.note)}</p>`:''}${stale?`<span class="emg-stale">${escapeHtml(stale)}</span>`:''}<ul class="emg-times">${lines.map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul><p class="form-help">${escapeHtml(E.PRECISION_LABEL[r.location_precision]||'')}</p>${actions}</div>`;
 }
+
 function visibleReports(){
   const history=document.getElementById('historyToggle')?.checked;
   const freshOnly=document.getElementById('freshOnly')?.checked;
@@ -138,36 +151,57 @@ function chips(name,list,current){
 function renderTypeGrid(preselect='flood'){
   const grid=document.getElementById('typeGrid');
   grid.innerHTML=E.FALLBACK_RULES.map(r=>`<label class="emg-type"><input type="radio" name="type_code" value="${r.type_code}" ${r.type_code===preselect?'checked':''}><span><b>${r.icon}</b>${escapeHtml(r.label_th)}</span></label>`).join('');
-  grid.querySelectorAll('[name=type_code]').forEach(i=>i.onchange=()=>{selectedType=i.value;renderTypeFields();});
+  grid.querySelectorAll('[name=type_code]').forEach(i=>i.onchange=()=>{selectedType=i.value;renderTypeFields({});});
 }
-function renderTypeFields(){
+function renderTypeFields(values={}){
   const rule=E.ruleMap().get(selectedType)||E.FALLBACK_RULES[0];
   const specific=document.getElementById('typeSpecific');
   let html='';
-  if(selectedType==='flood')html=`<p class="emg-sub">ระดับน้ำ</p>${chips('water_depth',E.DEPTHS,'unknown')}<p class="emg-sub">การผ่านของรถ (ตามที่คุณเห็น)</p>${chips('vehicle_access',E.VEHICLES,'unknown')}`;
-  else if(selectedType==='road_passable'||selectedType==='road_blocked')html=`<p class="emg-sub">การผ่านของรถ (ตามที่คุณเห็น)</p>${chips('vehicle_access',E.VEHICLES,selectedType==='road_blocked'?'general_impassable':'general_passable')}`;
-  else if(selectedType==='help_request')html=`<p class="emg-sub">ต้องการอะไร</p>${chips('need_code',E.NEEDS,'water')}<label class="form-field">จำนวนคนโดยประมาณ (ไม่บังคับ)<input id="peopleCount" type="number" min="1" max="999" inputmode="numeric"></label><p class="form-help">อย่าใส่ชื่อ เบอร์โทร บ้านเลขที่ หรือข้อมูลส่วนตัวในรายงานสาธารณะ</p>`;
+  if(selectedType==='flood')html=`<p class="emg-sub">ระดับน้ำ</p>${chips('water_depth',E.DEPTHS,values.water_depth||'unknown')}<p class="emg-sub">การผ่านของรถ (ตามที่คุณเห็น)</p>${chips('vehicle_access',E.VEHICLES,values.vehicle_access||'unknown')}`;
+  else if(selectedType==='road_passable'||selectedType==='road_blocked')html=`<p class="emg-sub">การผ่านของรถ (ตามที่คุณเห็น)</p>${chips('vehicle_access',E.VEHICLES,values.vehicle_access||(selectedType==='road_blocked'?'general_impassable':'general_passable'))}`;
+  else if(selectedType==='help_request')html=`<p class="emg-sub">ต้องการอะไร</p>${chips('need_code',E.NEEDS,values.need_code||'water')}<label class="form-field">จำนวนคนโดยประมาณ (ไม่บังคับ)<input id="peopleCount" type="number" min="1" max="999" inputmode="numeric" value="${values.people_count?escapeHtml(values.people_count):''}"></label><p class="form-help">อย่าใส่ชื่อ เบอร์โทร บ้านเลขที่ หรือข้อมูลส่วนตัวในรายงานสาธารณะ</p>`;
   else html='<p class="form-help">เลือกตำแหน่งและใส่รายละเอียดสั้น ๆ ได้เลย</p>';
   specific.innerHTML=html;
-  const defaultPrecision=(selectedType==='help_request'&&rule.allowed_precisions.includes('approximate'))?'approximate':rule.allowed_precisions[0];
+  let defaultPrecision=values.location_precision;
+  if(!defaultPrecision || !rule.allowed_precisions.includes(defaultPrecision)) defaultPrecision=(selectedType==='help_request'&&rule.allowed_precisions.includes('approximate'))?'approximate':rule.allowed_precisions[0];
   document.getElementById('precisionChips').innerHTML=chips('location_precision',rule.allowed_precisions.map(p=>[p,E.PRECISION_LABEL[p]]),defaultPrecision);
   document.getElementById('helpNotice').hidden=selectedType!=='help_request';
 }
-function openReport(type='flood'){
+function pickerBar(show){
+  const bar=document.getElementById('mapPickBar');
+  bar.hidden=!show;
+  if(show){
+    const cancel=document.getElementById('mapPickCancel');
+    cancel.textContent=editingReportId?'ยกเลิกการแก้ไข':'ยกเลิกการรายงาน';
+  }
+}
+function cancelReportFlow(){
+  pickOnMap=false; editingReportId=null; picked=null; pickedSource=''; pickedAccuracy=null;
+  pickerBar(false);
+  const dlg=document.getElementById('reportDialog');
+  if(dlg.open)dlg.close();
+}
+function openReport(type='flood', existing=null){
   if(currentMode!=='live')setMode('live');
-  selectedType=type;
-  picked=null; pickOnMap=false;
-  document.getElementById('picked').textContent='ยังไม่ได้เลือกตำแหน่ง';
-  document.getElementById('note').value='';
+  selectedType=existing?.type_code||type;
+  editingReportId=existing?.id||null;
+  pickOnMap=false; pickerBar(false);
+  picked=null; pickedSource=''; pickedAccuracy=null;
+  if(existing)setPicked(existing.latitude,existing.longitude,'existing');
+  else document.getElementById('picked').textContent='ยังไม่ได้เลือกตำแหน่ง';
+  document.getElementById('note').value=existing?.note||'';
   document.getElementById('formError').hidden=true;
-  renderTypeGrid(type); renderTypeFields();
+  renderTypeGrid(selectedType); renderTypeFields(existing||{});
   document.getElementById('whenChips').innerHTML=chips('when',WHEN,'0');
-  document.getElementById('formTitle').textContent=type==='help_request'?'ขอความช่วยเหลือ':'แจ้งสถานการณ์';
+  document.getElementById('formTitle').textContent=editingReportId?'อัปเดตสถานการณ์':(selectedType==='help_request'?'ขอความช่วยเหลือ':'แจ้งสถานการณ์');
+  document.getElementById('submitReportBtn').textContent=editingReportId?'บันทึกการอัปเดต':'ส่งรายงาน';
   document.getElementById('reportDialog').showModal();
 }
-function setPicked(lat,lng){
-  picked=L.latLng(+lat,+lng);
-  document.getElementById('picked').textContent=`ตำแหน่ง: ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}`;
+function setPicked(lat,lng,source='map',accuracy=null){
+  picked=L.latLng(+lat,+lng); pickedSource=source; pickedAccuracy=Number.isFinite(Number(accuracy))?Number(accuracy):null;
+  const sourceText=source==='gps'?'GPS ปัจจุบัน':source==='existing'?'ตำแหน่งเดิม':'เลือกจากแผนที่';
+  const acc=pickedAccuracy!=null?` • ความแม่นยำประมาณ ±${Math.round(pickedAccuracy)} ม.`:'';
+  document.getElementById('picked').textContent=`${sourceText}: ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}${acc}`;
 }
 function formRadio(name){return document.querySelector(`#reportForm [name="${name}"]:checked`)?.value||'';}
 function submitReport(e){
@@ -184,10 +218,19 @@ function submitReport(e){
   if(selectedType==='help_request'){d.need_code=formRadio('need_code');const pc=document.getElementById('peopleCount')?.value;if(pc)d.people_count=Number(pc);}
   const validation=E.validateDraft(d);
   if(validation){err.textContent=validation;err.hidden=false;return;}
-  reports.push(makeReport({id:`local-${Date.now()}`,...d}));
+  if(editingReportId){
+    const idx=reports.findIndex(r=>r.id===editingReportId);
+    if(idx>=0){
+      const old=reports[idx];
+      reports[idx]=makeReport({id:old.id,created_at:old.created_at,updated_at:new Date().toISOString(),...d});
+    }
+  }else{
+    reports.push(makeReport({id:`local-${Date.now()}`,...d}));
+  }
   saveReports();
   selectedFilter='';renderFilters();renderEmergency();
   document.getElementById('reportDialog').close();
+  editingReportId=null; picked=null; pickedSource=''; pickedAccuracy=null; pickerBar(false);
 }
 
 renderFilters();
@@ -523,20 +566,63 @@ document.querySelectorAll('.mode').forEach(b=>b.addEventListener('click',()=>set
 
 map.on('click',ev=>{
   if(currentMode!=='live'||!pickOnMap)return;
-  setPicked(ev.latlng.lat,ev.latlng.lng);
-  pickOnMap=false;
+  setPicked(ev.latlng.lat,ev.latlng.lng,'map');
+  pickOnMap=false; pickerBar(false);
   document.getElementById('reportDialog').showModal();
 });
 
+function useCurrentGps(){
+  const pickedEl=document.getElementById('picked');
+  if(!navigator.geolocation){pickedEl.textContent='อุปกรณ์/เบราว์เซอร์นี้ไม่รองรับ GPS';return;}
+  pickedEl.textContent='กำลังอ่านตำแหน่ง GPS…';
+  navigator.geolocation.getCurrentPosition(
+    p=>{
+      setPicked(p.coords.latitude,p.coords.longitude,'gps',p.coords.accuracy);
+      map.setView(picked,Math.max(map.getZoom(),14));
+      pickOnMap=false; pickerBar(false);
+      const dlg=document.getElementById('reportDialog'); if(!dlg.open)dlg.showModal();
+    },
+    err=>{
+      const msg=err.code===1?'ยังไม่ได้อนุญาตตำแหน่ง GPS':err.code===2?'หา GPS ไม่พบ':'อ่าน GPS หมดเวลา';
+      pickedEl.textContent=`${msg} — กรุณาเลือกจากแผนที่`;
+      if(pickOnMap){ const dlg=document.getElementById('reportDialog'); if(!dlg.open)dlg.showModal(); pickOnMap=false; pickerBar(false); }
+    },
+    {enableHighAccuracy:true,timeout:10000,maximumAge:30000}
+  );
+}
+
 document.getElementById('reportBtn').onclick=()=>openReport('flood');
 document.getElementById('helpBtn').onclick=()=>openReport('help_request');
-document.getElementById('closeReport').onclick=()=>document.getElementById('reportDialog').close();
-document.getElementById('locateBtn').onclick=()=>{
-  if(!navigator.geolocation)return;
-  navigator.geolocation.getCurrentPosition(p=>{setPicked(p.coords.latitude,p.coords.longitude);map.setView(picked,14);},()=>{document.getElementById('picked').textContent='อ่าน GPS ไม่สำเร็จ กรุณาเลือกบนแผนที่';});
+document.getElementById('closeReport').onclick=cancelReportFlow;
+document.getElementById('locateBtn').onclick=useCurrentGps;
+document.getElementById('pickOnMapBtn').onclick=()=>{
+  pickOnMap=true;
+  document.getElementById('reportDialog').close();
+  pickerBar(true);
 };
-document.getElementById('pickOnMapBtn').onclick=()=>{pickOnMap=true;document.getElementById('reportDialog').close();const msg=document.getElementById('mapStatus');msg.hidden=false;msg.textContent='แตะตำแหน่งบนแผนที่ 1 ครั้งเพื่อปักหมุด';setTimeout(()=>{if(msg.textContent.includes('แตะตำแหน่ง'))msg.hidden=true;},5000);};
+document.getElementById('mapPickGps').onclick=useCurrentGps;
+document.getElementById('mapPickBack').onclick=()=>{pickOnMap=false;pickerBar(false);document.getElementById('reportDialog').showModal();};
+document.getElementById('mapPickCancel').onclick=cancelReportFlow;
+document.getElementById('reportDialog').addEventListener('cancel',e=>{e.preventDefault();cancelReportFlow();});
+document.getElementById('reportDialog').addEventListener('click',e=>{if(e.target===e.currentTarget)cancelReportFlow();});
 document.getElementById('reportForm').addEventListener('submit',submitReport);
+
+document.addEventListener('click',e=>{
+  const btn=e.target.closest('[data-report-action]'); if(!btn)return;
+  const id=btn.dataset.reportId, action=btn.dataset.reportAction;
+  const r=reports.find(x=>String(x.id)===String(id));
+  if(!r || !isOwnedLocalReport(r))return;
+  if(action==='edit'){map.closePopup();openReport(r.type_code,r);return;}
+  if(action==='resolve'){
+    r.emergency_status='resolved'; r.updated_at=new Date().toISOString(); r.resolved_at=r.updated_at;
+    saveReports();map.closePopup();renderEmergency();return;
+  }
+  if(action==='delete'){
+    if(!confirm('ลบหมุดนี้ออกจากเครื่องนี้ใช่ไหม? การลบย้อนกลับไม่ได้'))return;
+    reports=reports.filter(x=>String(x.id)!==String(id));
+    saveReports();map.closePopup();renderEmergency();
+  }
+});
 
 document.getElementById('freshOnly').onchange=renderEmergency;
 document.getElementById('historyToggle').onchange=renderEmergency;
