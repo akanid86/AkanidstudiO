@@ -12,17 +12,16 @@
   <header>
     <div>
       <strong>น้ำท่วมบ้านเรา</strong>
-      <span>ลุ่มน้ำแม่กลอง • Prototype v0.4 • MAJOR WATERWAYS + WATER CONTROL</span>
+      <span>ลุ่มน้ำแม่กลอง • Prototype v0.5 • REAL WATER CONNECTIONS</span>
     </div>
     <button id="alertsBtn" aria-label="ประกาศ">🔔 <b id="alertCount">1</b></button>
   </header>
 
-  <div class="official">⚠️ <b>ข้อมูลเพื่อการเฝ้าระวัง</b> <span>แสดงเฉพาะแม่น้ำหลัก/คลองหลักที่มีชื่อ • เพิ่มชั้นเขื่อนและประตูระบายน้ำ • ขอบเขตลุ่มน้ำยังเป็น Prototype</span></div>
+  <div class="official">⚠️ <b>ข้อมูลเพื่อการเฝ้าระวัง</b> <span>เส้นเชื่อมเขื่อนใช้ geometry ทางน้ำจาก OpenStreetMap เท่านั้น • ไม่ลากเส้นตรงและไม่เติมช่องว่างเอง</span></div>
 
   <div class="modebar" role="tablist" aria-label="โหมดแผนที่">
     <button class="mode active" data-mode="live">LIVE</button>
     <button class="mode" data-mode="basin">BASIN</button>
-    <button class="mode" data-mode="infographic">INFOGRAPHIC</button>
   </div>
 
   <main>
@@ -44,7 +43,8 @@
       <section class="card" id="layerCard">
         <h3>ชั้นข้อมูล</h3>
         <label><input id="heatToggle" type="checkbox" checked> ฮีตแมประดับน้ำ</label>
-        <label><input id="waterToggle" type="checkbox" checked> แม่น้ำหลัก / คลองหลักที่มีชื่อ</label>
+        <label><input id="routeToggle" type="checkbox" checked> เส้นทางน้ำจริงเชื่อมเขื่อน</label>
+        <label><input id="waterToggle" type="checkbox" checked> คลองหลักที่มีชื่อ</label>
         <label><input id="basinToggle" type="checkbox"> กรอบศึกษาลุ่มน้ำ (Prototype)</label>
         <label><input id="controlToggle" type="checkbox" checked> เขื่อน / ประตูระบายน้ำ</label>
         <label><input id="helpToggle" type="checkbox" checked> ขอความช่วยเหลือ</label>
@@ -52,30 +52,21 @@
 
       <section class="card env" id="dataCard">
         <h3>ข้อมูลลุ่มน้ำ</h3>
+        <p>🔗 ทางน้ำเชื่อมเขื่อน: <b id="routeStatus">รอโหลดเส้นทางจริง</b></p>
+        <p>🗺️ คลองหลัก: <b id="waterStatus">รอโหลดข้อมูลจริง</b></p>
         <p>🌧️ ฝน: <b>รอเชื่อมข้อมูลสด</b></p>
         <p>🌊 ปากน้ำแม่กลอง: <b>มีข้อมูล Tide 2026 แล้ว</b></p>
         <p>🌊 ปากน้ำท่าจีน: <b>มีข้อมูล Tide 2026 แล้ว</b></p>
         <p>💧 การระบายน้ำ: <b>รอ API/แหล่งทางการ</b></p>
-        <p>🗺️ ทางน้ำหลัก: <b id="waterStatus">รอโหลดข้อมูลจริง</b></p>
       </section>
 
       <section class="card basin-info" id="basinCard" hidden>
-        <h3>มุมมองลุ่มน้ำแม่กลอง</h3>
-        <p>ใช้เพื่อดูความสัมพันธ์ตั้งแต่พื้นที่ต้นน้ำ → ทางน้ำหลัก → พื้นที่ลุ่มกลาง → ปลายน้ำและอ่าวไทย</p>
-        <div class="flowline"><span>ต้นน้ำ</span><i>→</i><span>กลางน้ำ</span><i>→</i><span>ปลายน้ำ</span><i>→</i><span>อ่าวไทย</span></div>
-        <p class="warn">ขอบเขตที่แสดงตอนนี้ยังเป็นกรอบศึกษา Prototype ส่วนทางน้ำจะแสดงเฉพาะแม่น้ำที่มีชื่อและคลองหลักในรายการคัดกรอง เพื่อตัดคลองยิบย่อยออก</p>
-      </section>
-
-      <section class="card infographic" id="infographicCard" hidden>
-        <h3>Infographic — Mae Klong Basin</h3>
-        <img src="assets/maeklong-reference.jpg" alt="แผนที่อ้างอิงพื้นที่ต้นน้ำและพื้นที่ชุ่มน้ำ">
-        <div class="legend-grid">
-          <span>① ต้นน้ำ/พื้นที่ชุ่มน้ำ</span>
-          <span>② ทางน้ำหลัก</span>
-          <span>③ พื้นที่ชุมชน/รายงาน</span>
-          <span>④ ปลายน้ำ + น้ำทะเลหนุน</span>
-        </div>
-        <p class="source-note">ภาพนี้ใช้เป็นเอกสารอ้างอิงเพื่อออกแบบเลเยอร์ ไม่ได้ georeference เป็น GIS โดยอัตโนมัติ</p>
+        <h3>เส้นทางน้ำจริงของระบบแม่กลอง</h3>
+        <p><b>สาขาแควใหญ่:</b> เขื่อนศรีนครินทร์ → เขื่อนท่าทุ่งนา → แม่น้ำแควใหญ่</p>
+        <p><b>สาขาแควน้อย:</b> เขื่อนวชิราลงกรณ → แม่น้ำแควน้อย</p>
+        <p><b>ลำน้ำหลัก:</b> จุดบรรจบแควใหญ่/แควน้อย → แม่น้ำแม่กลอง → เขื่อนแม่กลอง → ปลายน้ำ</p>
+        <p><b>สาขาคลอง:</b> ประตูน้ำบางนกแขวก → คลองดำเนินสะดวก</p>
+        <p class="warn">ทุกเส้นที่ขีดเป็น geometry จาก OSM เท่านั้น ถ้าข้อมูลต้นทางขาดช่วง ระบบจะปล่อยช่องว่างไว้ ไม่สร้างเส้นสมมุติเพื่อเชื่อมให้ต่อกัน</p>
       </section>
     </aside>
   </main>
